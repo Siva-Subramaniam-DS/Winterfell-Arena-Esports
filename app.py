@@ -153,7 +153,7 @@ TOURNAMENT_SYSTEM_NAME = "Winterfell Arena Esports Tournament System"
 # Role IDs for permissions
 ROLE_IDS = {
     "judge": 1473773795176091674,
-    "recorder": 1302493626672091209,
+    "recorder": 1474281127643451543,
     "head_helper": 1473773791531372664,
     "helper_team": 1184587759487303790,
     "head_organizer": 1473773782681518273
