@@ -1370,107 +1370,84 @@ def get_user_permission_level(user_roles) -> str:
         return "user"  # Default to basic user permissions
 
 def filter_commands_by_permission(permission_level: str) -> dict:
-    """Filter command data based on user's permission level"""
+    """Filter and group command data into role-based buckets for the help menu"""
     try:
-        filtered_data = {}
+        grouped_data = {
+            "general": {
+                "title": "📖 General Commands",
+                "description": "Basic tools available to everyone",
+                "commands": COMMAND_DATA["system"]["commands"] + COMMAND_DATA["utility"]["commands"]
+            },
+            "rules": COMMAND_DATA["rules"]
+        }
         
-        # Always include system, utility and rules for everyone
-        filtered_data["system"] = COMMAND_DATA["system"]
-        filtered_data["utility"] = COMMAND_DATA["utility"]
-        filtered_data["rules"] = COMMAND_DATA["rules"]
-        
-        # Add role-specific commands based on permission level
+        # Helper Category (create, edit, captains, etc.)
         if permission_level in ["owner", "organizer", "helper"]:
-            # Owners, organizers and helpers get all commands
-            filtered_data["event_management"] = COMMAND_DATA["event_management"]
-            filtered_data["judge"] = COMMAND_DATA["judge"]
-        elif permission_level == "judge":
-            # Judges get judge commands and can see some event management
-            filtered_data["judge"] = COMMAND_DATA["judge"]
-            # Show limited event management (only event-result)
-            judge_event_commands = {
-                "title": "🏆 Event Management (Judge Access)",
-                "description": "Event commands available to judges",
-                "commands": [cmd for cmd in COMMAND_DATA["event_management"]["commands"] 
-                           if cmd["name"] == "/event-result"]
+            helper_cmds = [cmd for cmd in COMMAND_DATA["event_management"]["commands"] 
+                          if cmd["name"] in ["/event-create", "/event-edit", "/unassigned_events", "/add_captain", "/exchange", "/general_tie_breaker"]]
+            grouped_data["helper"] = {
+                "title": "🛡️ Helper Commands",
+                "description": "Tournament management for staff",
+                "commands": helper_cmds
             }
-            if judge_event_commands["commands"]:
-                filtered_data["event_management"] = judge_event_commands
+            
+        # Judge Category (results, unassigned)
+        if permission_level in ["owner", "organizer", "helper", "judge"]:
+            grouped_data["judge"] = {
+                "title": "👨‍⚖️ Judge Commands",
+                "description": "Match result recording and scheduling",
+                "commands": COMMAND_DATA["judge"]["commands"]
+            }
+            
+        # Organizer Category (Deletions, system tests)
+        if permission_level in ["owner", "organizer"]:
+            org_cmds = [cmd for cmd in COMMAND_DATA["event_management"]["commands"] 
+                       if cmd["name"] in ["/event-delete", "/test_channels", "/event-edit"]]
+            grouped_data["organizer"] = {
+                "title": "⚙️ Organizer Commands",
+                "description": "Administrative tournament control",
+                "commands": org_cmds
+            }
         
-        return filtered_data
+        return grouped_data
     except Exception as e:
         print(f"Error filtering commands by permission: {e}")
-        # Return basic commands as fallback
         return {
-            "system": COMMAND_DATA["system"],
-            "utility": COMMAND_DATA["utility"]
+            "general": {
+                "title": "📖 General Commands",
+                "description": "Basic tools",
+                "commands": COMMAND_DATA["system"]["commands"]
+            }
         }
 
 def build_help_embed(permission_level: str, user_name: str) -> discord.Embed:
-    """Build a comprehensive help embed based on user's permission level"""
+    """Build a concise help overview with role-based navigation"""
     try:
-        # Get filtered commands for this user
-        filtered_commands = filter_commands_by_permission(permission_level)
-        
         embed = discord.Embed(
-            title=f"🎯 {ORGANIZATION_NAME} Tournament System",
-            description=f"**Command Guide** - Showing commands available to you\n*Permission Level: {permission_level.title()}*",
+            title=f"🎯 {ORGANIZATION_NAME} Help Center",
+            description=f"Hello **{user_name}**! 👋\nPlease select your role below to view only the commands you need.\n\n*Current Access Level: {permission_level.title()}*",
             color=discord.Color.blue(),
             timestamp=discord.utils.utcnow()
         )
         
-        # Add Tutorial Videos section for high permission roles
-        if permission_level in ["owner", "organizer", "helper", "judge"]:
-            tutorial_text = (
-                "🎥 **Feature Tutorials:**\n"
-                "• [Create Events](https://youtu.be/Xo0CipufKaM)\n"
-                "• [Add Captains](https://youtu.be/4zAQ7pMcsFM)\n"
-                "• [Post Results](https://youtu.be/fQupdX9aCHI)\n"
-                "• [Staff Exchange](https://youtu.be/vBYZSkdiyFI)\n"
-                "• [Delete & Choose](https://youtu.be/xSLbccfaKzE)"
-            )
-            embed.add_field(name="📼 Training Center", value=tutorial_text, inline=False)
+        # Add Tutorial Videos section (Keep this as requested)
+        tutorial_text = (
+            "🎥 [Create Events](https://youtu.be/Xo0CipufKaM) | [Add Captains](https://youtu.be/4zAQ7pMcsFM)\n"
+            "🎥 [Post Results](https://youtu.be/fQupdX9aCHI) | [Staff Exchange](https://youtu.be/vBYZSkdiyFI)\n"
+            "🎥 [Delete & Choose](https://youtu.be/xSLbccfaKzE)"
+        )
+        embed.add_field(name="📼 Training Center", value=tutorial_text, inline=False)
+
+        # Quick summary of what's inside
+        guide_summary = (
+            "📖 **General**: Rules, Time, Maps, etc.\n"
+            "🛡️ **Helper**: Match setup & event creation\n"
+            "👨‍⚖️ **Judge**: Scheduling & result recording\n"
+            "⚙️ **Organizer**: Management & Administration"
+        )
+        embed.add_field(name="📋 Navigation Guide", value=guide_summary, inline=False)
         
-        # Add command categories
-        for category_key, category_data in filtered_commands.items():
-            commands_text = ""
-            
-            for cmd in category_data["commands"]:
-                # Format command entry
-                commands_text += f"**{cmd['name']}**\n"
-                commands_text += f"└ {cmd['description']}\n"
-                commands_text += f"└ *Permissions: {cmd['permissions']}*\n"
-                if cmd.get('round_options'):
-                    commands_text += f"└ 🎯 **Round Options:** {cmd['round_options']}\n"
-                if cmd.get('example'):
-                    commands_text += f"└ 💡 {cmd['example']}\n"
-                commands_text += "\n"
-            
-            # Add field to embed (Discord has a 1024 character limit per field)
-            if len(commands_text) > 1024:
-                # Split long content into multiple fields
-                parts = []
-                current_part = ""
-                for line in commands_text.split('\n'):
-                    if len(current_part + line + '\n') > 1024:
-                        parts.append(current_part.strip())
-                        current_part = line + '\n'
-                    else:
-                        current_part += line + '\n'
-                if current_part.strip():
-                    parts.append(current_part.strip())
-                
-                for i, part in enumerate(parts):
-                    field_name = category_data["title"] if i == 0 else f"{category_data['title']} (cont.)"
-                    embed.add_field(name=field_name, value=part, inline=False)
-            else:
-                embed.add_field(
-                    name=category_data["title"],
-                    value=commands_text,
-                    inline=False
-                )
-        
-        embed.set_footer(text=f"{ORGANIZATION_NAME} • Command Guide")
+        embed.set_footer(text=f"{ORGANIZATION_NAME} • Select a category below")
         return embed
         
     except Exception as e:
@@ -1682,36 +1659,39 @@ class HelpNavigationView(View):
         self.permission_level = permission_level
         self.user_name = user_name
         
-    @discord.ui.button(label="⚙️ System", style=discord.ButtonStyle.primary, emoji="⚙️")
-    async def system_commands(self, interaction: discord.Interaction, button: Button):
-        """Show system commands"""
-        await self.show_category(interaction, "system")
-    
-    @discord.ui.button(label="🛠️ Utility", style=discord.ButtonStyle.primary, emoji="🛠️")
-    async def utility_commands(self, interaction: discord.Interaction, button: Button):
-        """Show utility commands"""
-        await self.show_category(interaction, "utility")
+    @discord.ui.button(label="📖 General", style=discord.ButtonStyle.primary, emoji="📖")
+    async def general_commands(self, interaction: discord.Interaction, button: Button):
+        """Show general commands"""
+        await self.show_category(interaction, "general")
 
     @discord.ui.button(label="📜 Rules", style=discord.ButtonStyle.primary, emoji="📜")
     async def rules_section(self, interaction: discord.Interaction, button: Button):
         """Show command rules section"""
         await self.show_category(interaction, "rules")
     
-    @discord.ui.button(label="🏆 Events", style=discord.ButtonStyle.primary, emoji="🏆")
-    async def event_commands(self, interaction: discord.Interaction, button: Button):
-        """Show event management commands"""
-        if self.permission_level in ["owner", "organizer", "helper", "judge"]:
-            await self.show_category(interaction, "event_management")
+    @discord.ui.button(label="🛡️ Helper", style=discord.ButtonStyle.success, emoji="🛡️")
+    async def helper_commands(self, interaction: discord.Interaction, button: Button):
+        """Show helper commands"""
+        if self.permission_level in ["owner", "organizer", "helper"]:
+            await self.show_category(interaction, "helper")
         else:
-            await interaction.response.send_message("❌ You need special permissions to view event management commands.", ephemeral=True)
+            await interaction.response.send_message("❌ Limited to **Helpers** and above.", ephemeral=True)
     
-    @discord.ui.button(label="👨‍⚖️ Judge", style=discord.ButtonStyle.primary, emoji="👨‍⚖️")
+    @discord.ui.button(label="👨‍⚖️ Judge", style=discord.ButtonStyle.success, emoji="👨‍⚖️")
     async def judge_commands(self, interaction: discord.Interaction, button: Button):
         """Show judge commands"""
         if self.permission_level in ["owner", "organizer", "helper", "judge"]:
             await self.show_category(interaction, "judge")
         else:
-            await interaction.response.send_message("❌ You need Judge role or higher to view judge commands.", ephemeral=True)
+            await interaction.response.send_message("❌ Limited to **Judges** and above.", ephemeral=True)
+
+    @discord.ui.button(label="⚙️ Organizer", style=discord.ButtonStyle.danger, emoji="⚙️")
+    async def org_commands(self, interaction: discord.Interaction, button: Button):
+        """Show organizer commands"""
+        if self.permission_level in ["owner", "organizer"]:
+            await self.show_category(interaction, "organizer")
+        else:
+            await interaction.response.send_message("❌ Limited to **Organizers**.", ephemeral=True)
     
     @discord.ui.button(label="🔄 Back to Overview", style=discord.ButtonStyle.secondary, emoji="🔄", row=1)
     async def back_to_overview(self, interaction: discord.Interaction, button: Button):
