@@ -580,6 +580,7 @@ COMMAND_DATA = {
                 "description": "Make a random choice from comma-separated options",
                 "usage": "/choose options:<option1,option2,option3>",
                 "permissions": "everyone",
+                "tutorial_url": "https://youtu.be/xSLbccfaKzE",
                 "example": "Example: `/choose options:Map1,Map2,Map3` to randomly select a map",
                 "parameters": [
                     {
@@ -737,6 +738,7 @@ COMMAND_DATA = {
                 "description": "Create new tournament events with Group support and Winner/Loser options",
                 "usage": "/event-create team_1_captain:<@user> team_2_captain:<@user> hour:<0-23> minute:<0-59> date:<1-31> month:<1-12> round:<round> tournament:<name> [group:<A-J/Winner/Loser>]",
                 "permissions": "head_organizer / head_helper / helper_team",
+                "tutorial_url": "https://youtu.be/Xo0CipufKaM",
                 "example": "Example: `/event-create team_1_captain:@Captain1 team_2_captain:@Captain2 hour:15 minute:30 date:25 month:12 round:R1 tournament:Summer Cup group:Group A`",
                 "round_options": "R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, Qualifier, Semi Final, Final",
                 "group_options": "Group A, Group B, Group C, Group D, Group E, Group F, Group G, Group H, Group I, Group J, Winner, Loser",
@@ -885,6 +887,7 @@ COMMAND_DATA = {
                 "description": "Record match results with Group support and comprehensive tournament tracking",
                 "usage": "/event-result winner:<@user> winner_score:<score> loser:<@user> loser_score:<score> tournament:<name> round:<round> [group:<A-J/Winner/Loser>] [remarks:<text>] [screenshots:<1-11>]",
                 "permissions": "head_organizer / judge",
+                "tutorial_url": "https://youtu.be/fQupdX9aCHI",
                 "example": "Use `/event-result` to record match outcomes with group information and screenshot evidence",
                 "round_options": "R1, R2, R3, R4, R5, R6, R7, R8, R9, R10, Qualifier, Semi Final, Final",
                 "group_options": "Group A, Group B, Group C, Group D, Group E, Group F, Group G, Group H, Group I, Group J, Winner, Loser",
@@ -1005,6 +1008,7 @@ COMMAND_DATA = {
                 "description": "Delete scheduled events (use with caution)",
                 "usage": "/event-delete",
                 "permissions": "head_organizer / head_helper / helper_team",
+                "tutorial_url": "https://youtu.be/xSLbccfaKzE",
                 "example": "Use `/event-delete` and select from scheduled events to remove",
                 "parameters": [],
                 "usage_examples": [
@@ -1059,6 +1063,7 @@ COMMAND_DATA = {
                 "description": "Exchange a Judge or Recorder for an event",
                 "usage": "/exchange role:[Judge/Recorder] new_user:@User",
                 "permissions": "head_organizer / head_helper / helper_team / judge",
+                "tutorial_url": "https://youtu.be/vBYZSkdiyFI",
                 "example": "Use `/exchange` to swap staff for an event",
                 "parameters": [
                     {
@@ -1118,6 +1123,7 @@ COMMAND_DATA = {
                 "description": "Add captains to a match channel and rename it automatically",
                 "usage": "/add_captain round:<R1-Fin> captain1:<@user> captain2:<@user>",
                 "permissions": "organizer / helper",
+                "tutorial_url": "https://youtu.be/4zAQ7pMcsFM",
                 "example": "Use in a ticket to quickly setup the match environment",
                 "parameters": [
                     {
@@ -1406,13 +1412,24 @@ def build_help_embed(permission_level: str, user_name: str) -> discord.Embed:
         # Get filtered commands for this user
         filtered_commands = filter_commands_by_permission(permission_level)
         
-        # Create main embed
         embed = discord.Embed(
             title=f"🎯 {ORGANIZATION_NAME} Tournament System",
             description=f"**Command Guide** - Showing commands available to you\n*Permission Level: {permission_level.title()}*",
             color=discord.Color.blue(),
             timestamp=discord.utils.utcnow()
         )
+        
+        # Add Tutorial Videos section for high permission roles
+        if permission_level in ["owner", "organizer", "helper", "judge"]:
+            tutorial_text = (
+                "🎥 **Feature Tutorials:**\n"
+                "• [Create Events](https://youtu.be/Xo0CipufKaM)\n"
+                "• [Add Captains](https://youtu.be/4zAQ7pMcsFM)\n"
+                "• [Post Results](https://youtu.be/fQupdX9aCHI)\n"
+                "• [Staff Exchange](https://youtu.be/vBYZSkdiyFI)\n"
+                "• [Delete & Choose](https://youtu.be/xSLbccfaKzE)"
+            )
+            embed.add_field(name="📼 Training Center", value=tutorial_text, inline=False)
         
         # Add command categories
         for category_key, category_data in filtered_commands.items():
@@ -1826,8 +1843,16 @@ class CommandDetailView(View):
             embed.add_field(
                 name="ℹ️ Basic Information",
                 value=f"**Usage:** `{cmd['usage']}`\n**Permissions:** {cmd['permissions']}",
-                inline=False
+                inline=True
             )
+            
+            # Video tutorial if available
+            if cmd.get('tutorial_url'):
+                embed.add_field(
+                    name="🎥 Video Tutorial",
+                    value=f"[Watch Guide]({cmd['tutorial_url']})",
+                    inline=True
+                )
             
             # Parameters section
             if cmd.get('parameters') and len(cmd['parameters']) > 0:
@@ -2889,8 +2914,8 @@ async def help_command(interaction: discord.Interaction):
         # Create interactive navigation view
         view = HelpNavigationView(permission_level, interaction.user.display_name)
         
-        # Send response with interactive buttons
-        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        # Send response with interactive buttons (public message)
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=False)
         
     except Exception as e:
         print(f"Error in help command: {e}")
