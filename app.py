@@ -477,6 +477,24 @@ COMMAND_DATA = {
                 ],
                 "related_commands": ["/event-result"],
                 "common_errors": []
+            },
+            {
+                "name": "/info",
+                "description": "Display bot information, latency, and server statistics",
+                "usage": "/info",
+                "permissions": "everyone",
+                "example": "Use `/info` to check bot status and statistics",
+                "parameters": [],
+                "usage_examples": [
+                    {
+                        "scenario": "Checking bot status",
+                        "command": "/info",
+                        "explanation": "Shows latency, server count, and version info"
+                    }
+                ],
+                "tips_and_warnings": [],
+                "related_commands": ["/help"],
+                "common_errors": []
             }
         ]
     },
@@ -598,6 +616,115 @@ COMMAND_DATA = {
                         "solution": "Provide at least 2 options separated by commas"
                     }
                 ]
+            },
+            {
+                "name": "/maps",
+                "description": "Randomly select 3, 5, or 7 maps from the tournament pool",
+                "usage": "/maps count:<3|5|7>",
+                "permissions": "everyone",
+                "example": "Example: `/maps count:5` to select 5 random maps",
+                "parameters": [
+                    {
+                        "name": "count",
+                        "type": "integer",
+                        "required": True,
+                        "description": "Number of maps to pick (must be 3, 5, or 7)",
+                        "constraints": "3, 5, or 7",
+                        "examples": ["3", "5", "7"]
+                    }
+                ],
+                "usage_examples": [
+                    {
+                        "scenario": "Selecting maps for a Bo5",
+                        "command": "/maps count:5",
+                        "explanation": "Picks 5 unique maps from the pool"
+                    }
+                ],
+                "tips_and_warnings": [
+                    {
+                        "type": "tip",
+                        "content": "Useful for veto processes or random selections"
+                    }
+                ],
+                "related_commands": ["/choose"],
+                "common_errors": []
+            },
+            {
+                "name": "?sh / ?dq / ?dd / ?ho",
+                "description": "Quickly update ticket channel status with status icons (🟢, 🔴, ✅, 🟡)",
+                "usage": "?[code]",
+                "permissions": "everyone",
+                "example": "Type `?sh` to mark a match as started",
+                "parameters": [],
+                "usage_examples": [
+                    {
+                        "scenario": "Marking a match as finished",
+                        "command": "?dd",
+                        "explanation": "Adds ✅ to the channel name"
+                    }
+                ],
+                "tips_and_warnings": [
+                    {
+                        "type": "tip",
+                        "content": "Use these in match tickets to keep the sidebar organized"
+                    }
+                ],
+                "related_commands": [],
+                "common_errors": []
+            },
+            {
+                "name": "?b",
+                "description": "Get the official tournament bracket link",
+                "usage": "?b",
+                "permissions": "everyone",
+                "example": "Type `?b` to see current standings",
+                "parameters": [],
+                "usage_examples": [],
+                "tips_and_warnings": [],
+                "related_commands": [],
+                "common_errors": []
+            }
+        ]
+    },
+    "rules": {
+        "title": "📜 Command Rules",
+        "description": "General rules and etiquette for using bot commands",
+        "commands": [
+            {
+                "name": "📍 Channel Etiquette",
+                "description": "Use commands only in designated channels or active tournament tickets.",
+                "usage": "General Rule",
+                "permissions": "everyone",
+                "example": "Match-specific commands should stay in match tickets.",
+                "parameters": [],
+                "usage_examples": [],
+                "tips_and_warnings": [],
+                "related_commands": [],
+                "common_errors": []
+            },
+            {
+                "name": "🛡️ No Spamming",
+                "description": "Avoid triggering commands repeatedly. Wait for the bot to process your request.",
+                "usage": "General Rule",
+                "permissions": "everyone",
+                "example": "Only click 'Take Schedule' once.",
+                "parameters": [],
+                "usage_examples": [],
+                "tips_and_warnings": [],
+                "related_commands": [],
+                "common_errors": []
+            },
+            {
+                "name": "🎯 Accuracy",
+                "description": "Ensure all inputs (scores, dates, names) are correct before submitting results.",
+                "usage": "Data Integrity",
+                "permissions": "everyone",
+                "example": "Verify the winner mention in /event-result.",
+                "parameters": [],
+                "usage_examples": [],
+                "tips_and_warnings": [],
+                "related_commands": [],
+                "common_errors": []
             }
         ]
     },
@@ -955,8 +1082,79 @@ COMMAND_DATA = {
                 "tips_and_warnings": [],
                 "related_commands": ["/event-create"],
                 "common_errors": []
+            },
+            {
+                "name": "/general_tie_breaker",
+                "description": "Break a tie between two teams by calculating total player scores",
+                "usage": "/general_tie_breaker tm1_pl1_score:<val> ... tm2_pl5_score:<val>",
+                "permissions": "organizer / helper",
+                "example": "Input all player scores to see which team wins by total score",
+                "parameters": [
+                    {
+                        "name": "tm1_pl1-5_score",
+                        "type": "integer",
+                        "required": True,
+                        "description": "Scores for all 5 players of Team 1"
+                    },
+                    {
+                        "name": "tm2_pl1-5_score",
+                        "type": "integer",
+                        "required": True,
+                        "description": "Scores for all 5 players of Team 2"
+                    }
+                ],
+                "usage_examples": [],
+                "tips_and_warnings": [
+                    {
+                        "type": "tip",
+                        "content": "Calculates the sum for both teams and declares a winner based on highest total"
+                    }
+                ],
+                "related_commands": ["/event-result"],
+                "common_errors": []
+            },
+            {
+                "name": "/add_captain",
+                "description": "Add captains to a match channel and rename it automatically",
+                "usage": "/add_captain round:<R1-Fin> captain1:<@user> captain2:<@user>",
+                "permissions": "organizer / helper",
+                "example": "Use in a ticket to quickly setup the match environment",
+                "parameters": [
+                    {
+                        "name": "round",
+                        "type": "choice",
+                        "required": True,
+                        "description": "The current tournament round"
+                    },
+                    {
+                        "name": "captain1/2",
+                        "type": "user",
+                        "required": True,
+                        "description": "The team captains"
+                    }
+                ],
+                "usage_examples": [],
+                "tips_and_warnings": [
+                    {
+                        "type": "note",
+                        "content": "Renames the channel to round-cap1-vs-cap2 format and pings rules"
+                    }
+                ],
+                "related_commands": ["/event-create"],
+                "common_errors": []
+            },
+            {
+                "name": "/test_channels",
+                "description": "Verify bot permissions in all configured channels",
+                "usage": "/test_channels",
+                "permissions": "owner / head_organizer",
+                "example": "Run this to debug if the bot can't post in certain channels",
+                "parameters": [],
+                "usage_examples": [],
+                "tips_and_warnings": [],
+                "related_commands": [],
+                "common_errors": []
             }
-
         ]
     },
     "judge": {
@@ -1140,37 +1338,6 @@ COMMAND_DATA = {
                 ],
                 "related_commands": ["Take Schedule Button", "/event-result"],
                 "common_errors": []
-            },
-            {
-                "name": "/judge-leaderboard",
-                "description": "Display judge leaderboard showing most active judges",
-                "usage": "/judge-leaderboard",
-                "permissions": "everyone",
-                "example": "Use `/judge-leaderboard` to see the most active judges",
-                "parameters": [],
-                "usage_examples": [
-                    {
-                        "scenario": "Viewing judge statistics",
-                        "command": "/judge-leaderboard",
-                        "explanation": "Shows top 15 judges ranked by number of matches they've judged in table format"
-                    }
-                ],
-                "tips_and_warnings": [
-                    {
-                        "type": "note",
-                        "content": "Statistics are updated automatically when judges use /event-result"
-                    },
-                    {
-                        "type": "tip",
-                        "content": "Head Organizers can reset the leaderboard using the reset button"
-                    },
-                    {
-                        "type": "warning",
-                        "content": "Leaderboard is displayed as a public message, not hidden"
-                    }
-                ],
-                "related_commands": ["/event-result", "/unassigned_events"],
-                "common_errors": []
             }
         ]
     }
@@ -1201,9 +1368,10 @@ def filter_commands_by_permission(permission_level: str) -> dict:
     try:
         filtered_data = {}
         
-        # Always include system and utility commands for everyone
+        # Always include system, utility and rules for everyone
         filtered_data["system"] = COMMAND_DATA["system"]
         filtered_data["utility"] = COMMAND_DATA["utility"]
+        filtered_data["rules"] = COMMAND_DATA["rules"]
         
         # Add role-specific commands based on permission level
         if permission_level in ["owner", "organizer", "helper"]:
@@ -1506,6 +1674,11 @@ class HelpNavigationView(View):
     async def utility_commands(self, interaction: discord.Interaction, button: Button):
         """Show utility commands"""
         await self.show_category(interaction, "utility")
+
+    @discord.ui.button(label="📜 Rules", style=discord.ButtonStyle.primary, emoji="📜")
+    async def rules_section(self, interaction: discord.Interaction, button: Button):
+        """Show command rules section"""
+        await self.show_category(interaction, "rules")
     
     @discord.ui.button(label="🏆 Events", style=discord.ButtonStyle.primary, emoji="🏆")
     async def event_commands(self, interaction: discord.Interaction, button: Button):
@@ -4370,9 +4543,9 @@ async def add_captain(interaction: discord.Interaction, round: str, captain1: di
         rules_embed.add_field(
             name="📋 Tournament Information",
             value=(
-                "• Refer to https://discord.com/channels/1184558744760234015/1184578274031063141 for match schedules and pairings.\n"
-                "• Refer to https://discord.com/channels/1184558744760234015/1184578213033279609 for official updates.\n"
-                "• Refer to https://discord.com/channels/1184558744760234015/1184578387226923080 for tournament guidelines and regulations."
+                "• Refer to https://discord.com/channels/1097272892984676432/1474159759258161173 for match schedules and pairings.\n"
+                "• Refer to https://discord.com/channels/1097272892984676432/1473773972851003454 for official updates.\n"
+                "• Refer to https://discord.com/channels/1097272892984676432/1474159724659474442 for tournament guidelines and regulations."
             ),
             inline=False
         )
