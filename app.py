@@ -1390,13 +1390,13 @@ def filter_commands_by_permission(permission_level: str) -> dict:
             "rules": COMMAND_DATA["rules"]
         }
         
-        # Helper Category (create, edit, captains, etc.)
+        # Helper Category (create, edit, captains, delete, etc.)
         if permission_level in ["owner", "organizer", "helper"]:
             helper_cmds = [cmd for cmd in COMMAND_DATA["event_management"]["commands"] 
-                          if cmd["name"] in ["/event-create", "/event-edit", "/unassigned_events", "/add_captain", "/exchange", "/general_tie_breaker"]]
+                          if cmd["name"] in ["/event-create", "/event-edit", "/event-delete", "/unassigned_events", "/add_captain", "/exchange", "/general_tie_breaker"]]
             grouped_data["helper"] = {
                 "title": "🛡️ Helper Commands",
-                "description": "Tournament management for staff",
+                "description": "Tournament management & match setup",
                 "commands": helper_cmds
             }
             
@@ -1450,9 +1450,9 @@ def build_help_embed(permission_level: str, user_name: str) -> discord.Embed:
         # Quick summary of what's inside
         guide_summary = (
             "📖 **General**: Rules, Time, Maps, etc.\n"
-            "🛡️ **Helper**: Match setup & event creation\n"
+            "🛡️ **Helper**: Match setup & event management\n"
             "👨‍⚖️ **Judge**: Scheduling & result recording\n"
-            "⚙️ **Organizer**: Management & Administration"
+            "⚙️ **Organizer**: System control & Administration"
         )
         embed.add_field(name="📋 Navigation Guide", value=guide_summary, inline=False)
         
