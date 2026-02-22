@@ -151,13 +151,13 @@ ORGANIZATION_NAME = "Winterfell Arena Esports"
 TOURNAMENT_SYSTEM_NAME = "Winterfell Arena Esports Tournament System"
 
 # Role IDs for permissions
+# Role IDs for permissions (Supports single ID or list of IDs)
 ROLE_IDS = {
-    "judge": 1473773795176091674,
-    "recorder": 1474281127643451543,
-    "head_helper": 1473773791531372664,
-    "helper_team": 1184587759487303790,
-    "head_organizer": 1473773782681518273
-
+    "judge": [1473773795176091674],
+    "recorder": [1474281127643451543],
+    "head_helper": [1473773791531372664],
+    "helper_team": [1184587759487303790],
+    "head_organizer": [1473773782681518273, 1473773778415783986, 1473773779237863568, 1473773786419740700] 
 }
 
 # Set Windows event loop policy for asyncio
@@ -1349,25 +1349,34 @@ COMMAND_DATA = {
     }
 }
 
-def get_user_permission_level(user_roles) -> str:
-    """Determine user's permission level based on their Discord roles"""
+def get_user_permission_level(user: discord.Member) -> str:
+    """Determine user's permission level based on their Discord roles and ID"""
     try:
-        role_ids = [role.id for role in user_roles]
-        
-        # Check for bot owner
-        if BOT_OWNER_ID in role_ids:
+        # Check for bot owner (always owner level)
+        if user.id == BOT_OWNER_ID:
             return "owner"
-        elif ROLE_IDS["head_organizer"] in role_ids:
+            
+        role_ids = [role.id for role in user.roles]
+        
+        # Check for organizer roles
+        org_role_ids = ROLE_IDS["head_organizer"]
+        if any(rid in role_ids for rid in org_role_ids):
             return "organizer"
-        elif ROLE_IDS["head_helper"] in role_ids or ROLE_IDS["helper_team"] in role_ids:
+            
+        # Check for helper roles
+        helper_role_ids = ROLE_IDS["head_helper"] + ROLE_IDS["helper_team"]
+        if any(rid in role_ids for rid in helper_role_ids):
             return "helper"
-        elif ROLE_IDS["judge"] in role_ids:
+            
+        # Check for judge roles
+        judge_role_ids = ROLE_IDS["judge"]
+        if any(rid in role_ids for rid in judge_role_ids):
             return "judge"
-        else:
-            return "user"
+            
+        return "user"
     except Exception as e:
         print(f"Error determining user permission level: {e}")
-        return "user"  # Default to basic user permissions
+        return "user"
 
 def filter_commands_by_permission(permission_level: str) -> dict:
     """Filter and group command data into role-based buckets for the help menu"""
@@ -1463,9 +1472,11 @@ def build_help_embed(permission_level: str, user_name: str) -> discord.Embed:
         return embed
 
 def has_organizer_permission(interaction):
-    """Check if user has organizer permissions for rule management"""
-    head_organizer_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_organizer"])
-    return head_organizer_role is not None
+    """Check if user has organizer permissions (Bot Owner or any Head Organizer role)"""
+    if interaction.user.id == BOT_OWNER_ID:
+        return True
+    user_role_ids = [role.id for role in interaction.user.roles]
+    return any(rid in user_role_ids for rid in ROLE_IDS["head_organizer"])
 
 # Embed field utility functions for safe Discord.py embed manipulation
 def find_field_index(embed: discord.Embed, field_name: str) -> int:
@@ -1600,9 +1611,8 @@ class JudgeLeaderboardView(View):
     @discord.ui.button(label="🔄 Reset Leaderboard", style=discord.ButtonStyle.danger, emoji="🔄")
     async def reset_leaderboard(self, interaction: discord.Interaction, button: Button):
         """Reset staff leaderboard (Head Organizer only)"""
-        # Double-check permissions
-        head_organizer_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_organizer"])
-        if not head_organizer_role:
+        # Double-check permissions (Bot Owner or Head Organizer)
+        if not has_organizer_permission(interaction):
             await interaction.response.send_message("❌ You need **Head Organizer** role to reset the leaderboard.", ephemeral=True)
             return
         
@@ -2726,17 +2736,20 @@ def calculate_time_difference(event_datetime: datetime.datetime, user_timezone: 
     }
 
 def has_event_create_permission(interaction):
-    """Check if user has permission to create events (Head Organizer, Head Helper or Helper Team)"""
-    head_organizer_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_organizer"])
-    head_helper_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_helper"])
-    helper_team_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["helper_team"])
-    return head_organizer_role is not None or head_helper_role is not None or helper_team_role is not None
+    """Check if user has permission to create events (Bot Owner, Organizer, or Helper)"""
+    if interaction.user.id == BOT_OWNER_ID:
+        return True
+    user_role_ids = [role.id for role in interaction.user.roles]
+    staff_roles = ROLE_IDS["head_organizer"] + ROLE_IDS["head_helper"] + ROLE_IDS["helper_team"]
+    return any(rid in user_role_ids for rid in staff_roles)
 
 def has_event_result_permission(interaction):
-    """Check if user has permission to post event results (Head Organizer or Judge)"""
-    head_organizer_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_organizer"])
-    judge_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["judge"])
-    return head_organizer_role is not None or judge_role is not None
+    """Check if user has permission to post event results (Bot Owner, Organizer, or Judge)"""
+    if interaction.user.id == BOT_OWNER_ID:
+        return True
+    user_role_ids = [role.id for role in interaction.user.roles]
+    staff_roles = ROLE_IDS["head_organizer"] + ROLE_IDS["judge"]
+    return any(rid in user_role_ids for rid in staff_roles)
 
 @bot.event
 async def on_message(message):
@@ -2886,7 +2899,7 @@ async def help_command(interaction: discord.Interaction):
     """Enhanced help command with role-based filtering and interactive navigation"""
     try:
         # Determine user's permission level
-        permission_level = get_user_permission_level(interaction.user.roles)
+        permission_level = get_user_permission_level(interaction.user)
         
         # Build appropriate help embed
         embed = build_help_embed(permission_level, interaction.user.display_name)
@@ -3976,12 +3989,8 @@ async def unassigned_events(interaction: discord.Interaction):
 
 @tree.command(name="event-delete", description="Delete a scheduled event (Head Organizer/Head Helper/Helper Team only)")
 async def event_delete(interaction: discord.Interaction):
-    # Check permissions - only Head Organizer, Head Helper or Helper Team can delete events
-    head_organizer_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_organizer"])
-    head_helper_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_helper"])
-    helper_team_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["helper_team"])
-    
-    if not (head_organizer_role or head_helper_role or helper_team_role):
+    # Check permissions - only Head Organizer, Head Helper or Helper Team (and Bot Owner)
+    if not has_event_create_permission(interaction):
         await interaction.response.send_message("❌ You need **Head Organizer**, **Head Helper** or **Helper Team** role to delete events.", ephemeral=True)
         return
     
@@ -4464,15 +4473,8 @@ async def add_captain(interaction: discord.Interaction, round: str, captain1: di
     """Add two captains to a tournament match and rename the channel with tournament rules."""
     try:
         # Check permissions - only Head Helper, Helper Team, Head Organizer, or Bot Owner can add captains
-        head_helper_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_helper"])
-        helper_team_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["helper_team"])
-        head_organizer_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_organizer"])
-        
-        # Check if user is bot owner
-        is_bot_owner = interaction.user.id == BOT_OWNER_ID
-        
-        if not any([head_helper_role, helper_team_role, head_organizer_role, is_bot_owner]):
-            await interaction.response.send_message("❌ You don't have permission to use this command. Only Head Helper, Helper Team, Head Organizer, or Bot Owner can add captains.", ephemeral=True)
+        if not has_event_create_permission(interaction):
+            await interaction.response.send_message("❌ You don't have permission to use this command. Only staff (Helper/Organizer) or Bot Owner can add captains.", ephemeral=True)
             return
         
         # Validate round parameter
@@ -4653,12 +4655,8 @@ async def maps(interaction: discord.Interaction, count: int):
 async def test_channels(interaction: discord.Interaction):
     """Test channel access for debugging"""
     
-    # Check permissions
-    user_roles = [role.id for role in interaction.user.roles]
-    is_owner = interaction.user.id == BOT_OWNER_ID
-    is_organizer = ROLE_IDS["head_organizer"] in user_roles
-    
-    if not (is_owner or is_organizer):
+    # Check permissions (Owner or Head Organizer)
+    if not has_organizer_permission(interaction):
         await interaction.response.send_message(
             "❌ You need to be **Bot Owner** or **Head Organizer** to use this command.",
             ephemeral=True
