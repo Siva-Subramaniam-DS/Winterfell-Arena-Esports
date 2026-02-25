@@ -1118,8 +1118,8 @@ COMMAND_DATA = {
             },
             {
                 "name": "/add_captain",
-                "description": "Add captains to a match channel and rename it automatically",
-                "usage": "/add_captain round:<R1-Fin> captain1:<@user> captain2:<@user>",
+                "description": "Add team names and captains to a match channel and rename it automatically",
+                "usage": "/add_captain round:<R1-Fin> team1:<name> captain1:<@user> team2:<name> captain2:<@user>",
                 "permissions": "organizer / helper",
                 "tutorial_url": "https://youtu.be/4zAQ7pMcsFM",
                 "example": "Use in a ticket to quickly setup the match environment",
@@ -1131,17 +1131,23 @@ COMMAND_DATA = {
                         "description": "The current tournament round"
                     },
                     {
-                        "name": "captain1/2",
+                        "name": "team1 / team2",
+                        "type": "string",
+                        "required": True,
+                        "description": "The names of the two teams"
+                    },
+                    {
+                        "name": "captain1 / captain2",
                         "type": "user",
                         "required": True,
-                        "description": "The team captains"
+                        "description": "The mentions for team captains"
                     }
                 ],
                 "usage_examples": [],
                 "tips_and_warnings": [
                     {
                         "type": "note",
-                        "content": "Renames the channel to round-cap1-vs-cap2 format and pings rules"
+                        "content": "Renames the channel to round-team1-vs-team2 format and pings rules"
                     }
                 ],
                 "related_commands": ["/event-create"],
@@ -3921,9 +3927,9 @@ async def delete(interaction: discord.Interaction):
         await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
 
 
-@events_group.command(name="edit", description="Edit an event. Fill in the fields you want to change.")
+@events_group.command(name="edit", description="Edit an event. Select an event by title or edit the one in this channel.")
 @app_commands.describe(
-    title="Event title or name (e.g. Tournament Name)",
+    title="Search for event to edit or enter a new tournament name",
     captain1="New Team 1 Captain",
     captain2="New Team 2 Captain",
     team1="Update Team 1 Name",
@@ -3991,16 +3997,26 @@ async def edit(
             await interaction.followup.send("❌ You need **Bot Owner**, **Head Organizer**, **Head Helper** or **Helper Team** role to edit events.", ephemeral=True)
             return
     
-    # Find event in current channel
-    current_channel_id = interaction.channel.id
+    # Find event - either via specific title selection (autocomplete value is ID) 
+    # or find in current channel as fallback
     event_to_edit = None
     event_id = None
     
-    for ev_id, event_data in scheduled_events.items():
-        if event_data.get('channel_id') == current_channel_id:
-            event_to_edit = event_data
-            event_id = ev_id
-            break
+    # Priority 1: Check if title is actually a selected event ID from autocomplete
+    if title and title in scheduled_events:
+        event_id = title
+        event_to_edit = scheduled_events[event_id]
+        # Since title was used as a selector ID, we clear it so we don't 
+        # accidentally rename the tournament to the ID string later
+        title = None
+    else:
+        # Priority 2: Fallback to finding event in current channel
+        current_channel_id = interaction.channel.id
+        for ev_id, event_data in scheduled_events.items():
+            if event_data.get('channel_id') == current_channel_id:
+                event_to_edit = event_data
+                event_id = ev_id
+                break
     
     if not event_to_edit:
         await interaction.followup.send("❌ No event found in this ticket channel. Use `/events create` to create an event first.", ephemeral=True)
@@ -4208,6 +4224,29 @@ async def edit(
         await interaction.followup.send(f"❌ Error updating event: {str(e)}", ephemeral=True)
 
 
+@edit.autocomplete('title')
+async def title_autocomplete(interaction: discord.Interaction, current: str):
+    matches = []
+    # Get all scheduled events
+    for ev_id, data in scheduled_events.items():
+        t1 = data.get('team1_name', 'T1')
+        t2 = data.get('team2_name', 'T2')
+        rnd = data.get('round', '')
+        
+        # Create a descriptive match name for the dropdown
+        name = f"{t1} vs {t2}"
+        if rnd:
+            name += f" ({rnd})"
+        
+        # Filter based on current input
+        if current.lower() in name.lower():
+            matches.append(app_commands.Choice(name=name, value=ev_id))
+            if len(matches) >= 25: # Discord limit
+                break
+    return matches
+
+
+
 @tree.command(name="general_tie_breaker", description="To break a tie between two teams using the highest total score")
 @app_commands.describe(
     tm1_name="Name of the first team. By default, it is Alpha",
@@ -4332,8 +4371,10 @@ async def general_tie_breaker(
 @tree.command(name="add_captain", description="Add two captains to a tournament match and rename the channel")
 @app_commands.describe(
     round="Round of the tournament (R1-R10, Q, SF, Final)",
-    captain1="First captain/team for the match",
-    captain2="Second captain/team for the match",
+    team1="Name of the first team",
+    captain1="Mention Captain of Team 1",
+    team2="Name of the second team",
+    captain2="Mention Captain of Team 2",
     bracket="Optional bracket identifier (e.g., A, B, Winner, Loser)"
 )
 @app_commands.choices(
@@ -4353,7 +4394,7 @@ async def general_tie_breaker(
         app_commands.Choice(name="Final", value="Final")
     ]
 )
-async def add_captain(interaction: discord.Interaction, round: str, captain1: discord.Member, captain2: discord.Member, bracket: str = None):
+async def add_captain(interaction: discord.Interaction, round: str, team1: str, captain1: discord.Member, team2: str, captain2: discord.Member, bracket: str = None):
     """Add two captains to a tournament match and rename the channel with tournament rules."""
     try:
         # Check permissions - only Head Helper, Helper Team, Head Organizer, or Bot Owner can add captains
@@ -4370,11 +4411,11 @@ async def add_captain(interaction: discord.Interaction, round: str, captain1: di
         # Get current channel
         channel = interaction.channel
         
-        # Create new channel name
+        # Create new channel name using team names
         if bracket:
-            new_name = f"{bracket}-{round.lower()}-{captain1.name.lower()}-vs-{captain2.name.lower()}"
+            new_name = f"{bracket}-{round.lower()}-{team1.lower()}-vs-{team2.lower()}"
         else:
-            new_name = f"{round.lower()}-{captain1.name.lower()}-vs-{captain2.name.lower()}"
+            new_name = f"{round.lower()}-{team1.lower()}-vs-{team2.lower()}"
         
         # Remove special characters and spaces, replace with hyphens
         new_name = re.sub(r'[^a-zA-Z0-9\-]', '-', new_name)
@@ -4443,13 +4484,13 @@ async def add_captain(interaction: discord.Interaction, round: str, captain1: di
         
         rules_embed.add_field(
             name="👥 Match Participants",
-            value=f"**Round:** {round}\n**Captain 1:** {captain1.mention}\n**Captain 2:** {captain2.mention}",
+            value=f"**Round:** {round}\n**Team 1:** {team1} ({captain1.mention})\n**Team 2:** {team2} ({captain2.mention})",
             inline=False
         )
         
         rules_embed.add_field(
             name="🆘 Need Help?",
-            value="If you require any assistance, please ping <@&1184587759487303790> and they will be happy to assist.",
+            value="If you require any assistance, please ping <@&1473773792995315913> and they will be happy to assist.",
             inline=False
         )
         
