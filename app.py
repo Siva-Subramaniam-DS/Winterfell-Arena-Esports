@@ -229,9 +229,6 @@ reminder_tasks = {}
 # Track per-event cleanup tasks (to remove finished events after result)
 cleanup_tasks = {}
 
-# Store judge assignments to prevent overloading
-judge_assignments = {}  # {judge_id: [event_ids]}
-
 # Store staff statistic for leaderboard
 staff_stats = {}  # {user_id: {"name": str, "judge_count": int, "recorder_count": int, "last_activity": datetime}}
 
@@ -1573,29 +1570,6 @@ def update_embed_title_with_checkmark(embed: discord.Embed) -> bool:
         print(f"Error updating embed title with checkmark: {e}")
         return False
 
-def can_judge_take_schedule(judge_id: int, max_assignments: int = 3) -> tuple[bool, str]:
-    """Check if a judge can take another schedule"""
-    if judge_id not in judge_assignments:
-        return True, ""
-    
-    current_assignments = len(judge_assignments[judge_id])
-    if current_assignments >= max_assignments:
-        return False, f"You already have {current_assignments} schedule(s) assigned. Maximum allowed is {max_assignments}."
-    
-    return True, ""
-
-def add_judge_assignment(judge_id: int, event_id: str):
-    """Add a schedule assignment to a judge"""
-    if judge_id not in judge_assignments:
-        judge_assignments[judge_id] = []
-    judge_assignments[judge_id].append(event_id)
-
-def remove_judge_assignment(judge_id: int, event_id: str):
-    """Remove a schedule assignment from a judge"""
-    if judge_id in judge_assignments and event_id in judge_assignments[judge_id]:
-        judge_assignments[judge_id].remove(event_id)
-        if not judge_assignments[judge_id]:  # Remove empty list
-            del judge_assignments[judge_id]
 
 class JudgeLeaderboardView(View):
     """View for staff leaderboard with reset functionality"""
@@ -1994,8 +1968,6 @@ class TakeScheduleButton(View):
             await interaction.response.send_message(f"❌ You need the **{role_type.title()}** role to take this spot.", ephemeral=True)
             return
         
-        # Enforce limits for non-staff? (Optional, keeping simple for now)
-        
         self._taking_schedule = True
         try:
             await interaction.response.defer(ephemeral=True)
@@ -2295,8 +2267,10 @@ async def schedule_event_reminder_v2(event_id: str, team1_captain: discord.Membe
     except Exception as e:
         print(f"Error in schedule_event_reminder_v2 for event {event_id}: {e}")
 
-async def schedule_event_cleanup(event_id: str, delay_hours: int = 36):
-    """Schedule cleanup to remove an event after delay_hours (default 36h)."""
+
+
+async def schedule_event_cleanup(event_id: str, delay_hours: int = 2):
+    """Schedule cleanup to remove an event after delay_hours (default 2h)."""
     try:
         if event_id not in scheduled_events:
             return
@@ -2348,6 +2322,7 @@ async def schedule_event_cleanup(event_id: str, delay_hours: int = 36):
                     if event_id in scheduled_events:
                         del scheduled_events[event_id]
                         save_scheduled_events()
+                        print(f"Event {event_id} cleaned up from memory and file")
                 except Exception as e:
                     print(f"Error removing event {event_id} in cleanup: {e}")
             except asyncio.CancelledError:
@@ -2366,6 +2341,7 @@ async def schedule_event_cleanup(event_id: str, delay_hours: int = 36):
         print(f"Cleanup scheduled for event {event_id} in {delay_hours} hours")
     except Exception as e:
         print(f"Error scheduling cleanup for event {event_id}: {e}")
+
 
 # Google Fonts API Integration
 def download_google_font(font_family: str, font_style: str = "regular", font_weight: str = "400") -> str:
@@ -3720,7 +3696,7 @@ async def event_result(
         staff_attendance_channel = interaction.guild.get_channel(CHANNEL_IDS["staff_attendance"])
         if staff_attendance_channel:
             # Create staff attendance message
-            attendance_text = f"🏅 {winner.display_name} Vs {loser.display_name}\n"
+            attendance_text = f"🏅 {winner.mention} Vs {loser.mention}\n"
             attendance_text += f"**Round :** {round}\n"
             
             # Add group if specified
@@ -3728,7 +3704,7 @@ async def event_result(
                 attendance_text += f"**Group :** {group_label}\n"
             
             attendance_text += f"\n**Results**\n"
-            attendance_text += f"🏆 {winner.display_name} ({winner_score}) Vs ({loser_score}) {loser.display_name} 💀\n\n"
+            attendance_text += f"🏆 {winner.mention} ({winner_score}) Vs ({loser_score}) {loser.mention} 💀\n\n"
             attendance_text += f"**Staffs**\n"
             attendance_text += f"• Judge: {interaction.user.mention}\n"
             
@@ -3855,7 +3831,7 @@ async def event_result(
             except Exception as e:
                 print(f"Error processing title update for event {ev_id}: {e}")
             
-            await schedule_event_cleanup(ev_id, delay_hours=36)
+            await schedule_event_cleanup(ev_id, delay_hours=2)
             scheduled_any = True
         
         # Also update any schedule messages in the current channel
@@ -3885,7 +3861,7 @@ async def event_result(
             print(f"Error updating current channel schedule title: {e}")
 
         if scheduled_any:
-            await interaction.followup.send("🧹 Auto-cleanup scheduled: Related event(s) will be removed after 36 hours.", ephemeral=True)
+            await interaction.followup.send("🧹 Auto-cleanup scheduled: Related event(s) will be removed after 2 hours.", ephemeral=True)
     except Exception as e:
         print(f"Error scheduling auto-cleanup after results: {e}")
 
@@ -4047,9 +4023,6 @@ async def event_delete(interaction: discord.Interaction):
                     del reminder_tasks[selected_event_id]
                 
                 # Remove judge assignment if exists
-                if 'judge' in event_data and event_data['judge']:
-                    judge_id = event_data['judge'].id
-                    remove_judge_assignment(judge_id, selected_event_id)
                 
                 # Delete the original schedule message if it exists
                 deleted_message = False
@@ -4097,8 +4070,7 @@ async def event_delete(interaction: discord.Interaction):
                 # Build actions completed list
                 actions_completed = [
                     "• Event removed from schedule",
-                    "• Reminder cancelled",
-                    "• Judge assignment cleared"
+                    "• Reminder cancelled"
                 ]
                 
                 if deleted_message:
