@@ -1955,17 +1955,21 @@ class TakeScheduleButton(View):
                     return
             
         # Check permissions
-        user_roles = [r.id for r in interaction.user.roles]
+        user_role_ids = [r.id for r in interaction.user.roles]
         
         allowed = False
         if role_type == "judge":
-            if ROLE_IDS["judge"] in user_roles or ROLE_IDS["head_organizer"] in user_roles:
+            is_judge = any(rid in user_role_ids for rid in ROLE_IDS["judge"])
+            is_org = any(rid in user_role_ids for rid in ROLE_IDS["head_organizer"])
+            if is_judge or is_org:
                 allowed = True
             if self.judge:
                 await interaction.response.send_message(f"❌ Judge already assigned: {self.judge.display_name}", ephemeral=True)
                 return
         elif role_type == "recorder":
-            if ROLE_IDS["recorder"] in user_roles or ROLE_IDS["head_organizer"] in user_roles:
+            is_recorder = any(rid in user_role_ids for rid in ROLE_IDS["recorder"])
+            is_org = any(rid in user_role_ids for rid in ROLE_IDS["head_organizer"])
+            if is_recorder or is_org:
                 allowed = True
             if self.recorder:
                 await interaction.response.send_message(f"❌ Recorder already assigned: {self.recorder.display_name}", ephemeral=True)
@@ -3397,7 +3401,7 @@ async def create(
         # Post in Take-Schedule channel
         schedule_channel = interaction.guild.get_channel(CHANNEL_IDS["take_schedule"])
         if schedule_channel:
-            judge_ping = f"<@&{ROLE_IDS['judge']}>"
+            judge_ping = " ".join([f"<@&{rid}>" for rid in ROLE_IDS['judge']])
             if poster_image:
                 with open(poster_image, 'rb') as f:
                     file = discord.File(f, filename="event_poster.png")
@@ -3721,12 +3725,13 @@ async def unassigned_events(interaction: discord.Interaction):
     """Show all scheduled events that do not currently have a judge assigned."""
     try:
         # Allow Head Organizer, Head Helper, Helper Team, and Judges to view
-        head_organizer_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_organizer"]) if interaction.user else None
-        head_helper_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_helper"]) if interaction.user else None
-        helper_team_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["helper_team"]) if interaction.user else None
-        judge_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["judge"]) if interaction.user else None
+        user_role_ids = [role.id for role in interaction.user.roles]
+        is_org = any(rid in user_role_ids for rid in ROLE_IDS["head_organizer"])
+        is_h_helper = any(rid in user_role_ids for rid in ROLE_IDS["head_helper"])
+        is_helper_team = any(rid in user_role_ids for rid in ROLE_IDS["helper_team"])
+        is_judge = any(rid in user_role_ids for rid in ROLE_IDS["judge"])
 
-        if not (head_organizer_role or head_helper_role or helper_team_role or judge_role):
+        if not (is_org or is_h_helper or is_helper_team or is_judge):
             await interaction.response.send_message("❌ You need Organizer or Judge role to view unassigned events.", ephemeral=True)
             return
 
