@@ -1953,6 +1953,25 @@ class TakeScheduleButton(View):
         if self._taking_schedule:
             await interaction.response.send_message("⏳ Request processing. Please wait.", ephemeral=True)
             return
+
+        # Check if match has already started
+        if self.event_id in scheduled_events:
+            event_data = scheduled_events[self.event_id]
+            match_time = event_data.get('datetime')
+            if match_time:
+                # Ensure timezone awareness
+                if match_time.tzinfo is None:
+                    match_time = match_time.replace(tzinfo=pytz.UTC)
+                
+                now = datetime.datetime.now(pytz.UTC)
+                if now > match_time:
+                    # Disable buttons on the current view
+                    for item in self.children:
+                        if isinstance(item, discord.ui.Button):
+                            item.disabled = True
+                    await interaction.message.edit(view=self)
+                    await interaction.response.send_message("❌ This match has already started. You can no longer take this schedule.", ephemeral=True)
+                    return
             
         # Check permissions
         user_roles = [r.id for r in interaction.user.roles]
@@ -4317,8 +4336,27 @@ async def event_edit(
         # Post the updated event publicly in the channel
         await interaction.channel.send(embed=embed)
         
+        # Notify Judge and both Captains about the update
+        judge = event_to_edit.get('judge')
+        notification_text = f"🔔 {team1_captain.mention} {team2_captain.mention}"
+        if judge:
+                notification_text += f" {judge.mention}"
+        
+        notify_embed = discord.Embed(
+            title="⚠️ Match Details Updated",
+            description=f"The details for this match have been updated by {interaction.user.mention}.\n\n"
+                        f"**Teams:** {team1_captain.display_name} vs {team2_captain.display_name}\n"
+                        f"**Schedule:** {event_to_edit.get('time_str')} on {event_to_edit.get('date_str')}\n\n"
+                        f"Please check the updated schedule details above.",
+            color=discord.Color.gold(),
+            timestamp=discord.utils.utcnow()
+        )
+        notify_embed.set_footer(text=f"{ORGANIZATION_NAME} • Automated Notification")
+        
+        await interaction.channel.send(content=notification_text, embed=notify_embed)
+        
         # Send private confirmation to the user who edited
-        await interaction.followup.send("✅ Event updated successfully and posted in the channel!", ephemeral=True)
+        await interaction.followup.send("✅ Event updated successfully and all parties notified!", ephemeral=True)
         
     except Exception as e:
         await interaction.followup.send(f"❌ Error updating event: {str(e)}", ephemeral=True)
@@ -4797,6 +4835,30 @@ async def exchange(interaction: discord.Interaction, role: app_commands.Choice[s
             
             # Announce
             await interaction.response.send_message(f"✅ {new_user.mention} is now the **{role.name}** for this event.", ephemeral=False)
+            
+            # Additional Notification for all parties
+            team1 = data.get('team1_captain')
+            team2 = data.get('team2_captain')
+            current_judge = data.get('judge')
+            
+            pings = ""
+            if team1: pings += f"{team1.mention} "
+            if team2: pings += f"{team2.mention} "
+            if current_judge: pings += f"{current_judge.mention} "
+            
+            notify_embed = discord.Embed(
+                title="🔄 Staff Exchange Notification",
+                description=f"Staff assignment for this match has been updated.\n\n"
+                            f"**Role:** {role.name}\n"
+                            f"**New Staff:** {new_user.mention}\n"
+                            f"**Updated by:** {interaction.user.mention}",
+                color=discord.Color.blue(),
+                timestamp=discord.utils.utcnow()
+            )
+            notify_embed.set_footer(text=f"{ORGANIZATION_NAME} • Match Update")
+            
+            if pings:
+                await interaction.channel.send(content=f"🔔 {pings}", embed=notify_embed)
             break
             
     if not event_found:
