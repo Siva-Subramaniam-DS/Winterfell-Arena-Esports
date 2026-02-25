@@ -178,6 +178,10 @@ tree = bot.tree
 # Store scheduled events for reminders
 scheduled_events = {}
 
+# Create command groups
+events_group = app_commands.Group(name="events", description="Tournament event management")
+tree.add_command(events_group)
+
 
 # Load scheduled events from file on startup
 def load_scheduled_events():
@@ -206,15 +210,12 @@ def save_scheduled_events():
             if 'datetime' in event_copy:
                 event_copy['datetime'] = event_copy['datetime'].isoformat()
             
-            # Convert Discord Member objects to IDs for JSON serialization
-            if 'team1_captain' in event_copy and hasattr(event_copy['team1_captain'], 'id'):
-                event_copy['team1_captain'] = event_copy['team1_captain'].id
-            if 'team2_captain' in event_copy and hasattr(event_copy['team2_captain'], 'id'):
-                event_copy['team2_captain'] = event_copy['team2_captain'].id
-            if 'judge' in event_copy and hasattr(event_copy['judge'], 'id'):
-                event_copy['judge'] = event_copy['judge'].id
-            elif 'judge' in event_copy and event_copy['judge'] is None:
-                event_copy['judge'] = None
+            # Convert Discord objects to IDs
+            for key in ['team1_captain', 'team2_captain', 'judge', 'recorder', 'created_by', 'result_judge', 'winner', 'loser']:
+                if key in event_copy and hasattr(event_copy[key], 'id'):
+                    event_copy[key] = event_copy[key].id
+                elif key in event_copy and event_copy[key] is None:
+                    event_copy[key] = None
                 
             data_to_save[event_id] = event_copy
         
@@ -1904,7 +1905,7 @@ class CommandDetailView(View):
             await interaction.response.send_message("❌ Error loading command details.", ephemeral=True)
 
 class TakeScheduleButton(View):
-    def __init__(self, event_id: str, team1_captain: discord.Member, team2_captain: discord.Member, event_channel: discord.TextChannel = None):
+    def __init__(self, event_id: str, team1_captain: any, team2_captain: any, event_channel: discord.TextChannel = None):
         super().__init__(timeout=None)
         self.event_id = event_id
         self.team1_captain = team1_captain
@@ -3154,24 +3155,12 @@ async def team_balance(interaction: discord.Interaction, levels: str):
     except Exception as e:
         await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-@tree.command(name="event", description="Event management commands")
+@events_group.command(name="create", description="Create an event.")
 @app_commands.describe(
-    action="Select the event action to perform"
-)
-@app_commands.choices(
-    action=[
-        app_commands.Choice(name="create", value="create"),
-        app_commands.Choice(name="result", value="result")
-    ]
-)
-async def event(interaction: discord.Interaction, action: app_commands.Choice[str]):
-    """Base event command - this will be handled by subcommands"""
-    await interaction.response.send_message(f"Please use `/event {action.value}` with the appropriate parameters.", ephemeral=True)
-
-@tree.command(name="event-create", description="Creates an event (Head Organizer/Head Helper/Helper Team only)")
-@app_commands.describe(
-    team_1_captain="Captain of team 1",
-    team_2_captain="Captain of team 2", 
+    team1="Name of Team 1",
+    team2="Name of Team 2",
+    captain1="Mention Captain of Team 1",
+    captain2="Mention Captain of Team 2",
     hour="Hour of the event (0-23)",
     minute="Minute of the event (0-59)",
     date="Date of the event",
@@ -3216,10 +3205,10 @@ async def event(interaction: discord.Interaction, action: app_commands.Choice[st
         app_commands.Choice(name="Modern Warships Tanks (MWT)", value="MWT"),
     ]
 )
-async def event_create(
+async def create(
     interaction: discord.Interaction,
-    team_1_captain: discord.Member,
-    team_2_captain: discord.Member,
+    team1: str,
+    team2: str,
     hour: int,
     minute: int,
     date: int,
@@ -3227,6 +3216,8 @@ async def event_create(
     round: app_commands.Choice[str],
     tournament: str,
     mode: app_commands.Choice[str],
+    captain1: discord.Member = None,
+    captain2: discord.Member = None,
     group: app_commands.Choice[str] = None
 ):
     """Creates an event with the specified parameters"""
@@ -3238,6 +3229,34 @@ async def event_create(
     if not has_event_create_permission(interaction):
         await interaction.followup.send("❌ You need **Head Organizer**, **Head Helper** or **Helper Team** role to create events.", ephemeral=True)
         return
+    
+    # Helper to resolve names from mentions in strings
+    def resolve_name(val):
+        if not val: return val
+        match = re.search(r'<@!?(\d+)>', str(val))
+        if match:
+            member_id = int(match.group(1))
+            member = interaction.guild.get_member(member_id)
+            if member: return member.display_name
+        return val
+
+    # Determine final names and mentions
+    t1_display = resolve_name(team1)
+    t2_display = resolve_name(team2)
+    
+    t1_full = team1
+    if captain1:
+        if team1.lower() == captain1.display_name.lower() or team1.strip() == f"<@{captain1.id}>" or team1.strip() == f"<@!{captain1.id}>":
+             t1_full = captain1.mention
+        else:
+             t1_full = f"{team1} ({captain1.mention})"
+    
+    t2_full = team2
+    if captain2:
+        if team2.lower() == captain2.display_name.lower() or team2.strip() == f"<@{captain2.id}>" or team2.strip() == f"<@!{captain2.id}>":
+             t2_full = captain2.mention
+        else:
+             t2_full = f"{team2} ({captain2.mention})"
     
     # Validate input parameters
     if not (0 <= hour <= 23):
@@ -3256,141 +3275,120 @@ async def event_create(
         await interaction.followup.send("❌ Minute must be between 0 and 59", ephemeral=True)
         return
 
-    # Generate unique event ID
-    event_id = f"event_{int(datetime.datetime.now().timestamp())}"
-    
-    # Create event datetime
-    current_year = datetime.datetime.now().year
-    event_datetime = datetime.datetime(current_year, month, date, hour, minute)
-    
-    # Calculate time differences and format times
-    time_info = calculate_time_difference(event_datetime)
-    
-    # Resolve round label from choice
-    round_label = round.value if isinstance(round, app_commands.Choice) else str(round)
-    
-    # Resolve group label from choice
-    group_label = group.value if group and isinstance(group, app_commands.Choice) else None
-    
-    # Resolve mode
-    mode_label = mode.value
-    
-    # Store event data for reminders
-    scheduled_events[event_id] = {
-        'event_id': event_id,
-        'title': f"Round {round_label} Match",
-        'datetime': event_datetime,
-        'time_str': time_info['utc_time'],
-        'date_str': f"{date:02d}/{month:02d}",
-        'round': round_label,
-        'group': group_label,
-        'mode': mode_label,
-        'minutes_left': time_info['minutes_remaining'],
-        'tournament': tournament,
-        'judge': None,
-        'recorder': None,
-        'channel_id': interaction.channel.id,
-        'team1_captain': team_1_captain,
-        'team2_captain': team_2_captain
-    }
-    
-    # Log to Google Sheet
-    sheet_manager.log_event_creation(scheduled_events[event_id])
-
-    
-    print(f"📝 Event {event_id} created internally for {team_1_captain.display_name} vs {team_2_captain.display_name}")
-    
-    # Save events to file
-    save_scheduled_events()
-    print(f"💾 Event {event_id} saved to file")
-    
-    # Get random template image based on mode
-    template_image = get_random_template(mode_label)
-    poster_image = None
-    
-    if template_image:
-        try:
-            # Create poster with text overlays (exact same as Sample Bot)
-            poster_image = create_event_poster(
-                template_image, 
-                round_label, 
-                team_1_captain.name, 
-                team_2_captain.name, 
-                time_info['utc_time_simple'],
-                f"{date:02d}/{month:02d}/{current_year}"
-            )
-            if poster_image:
-                # Keep poster path for later cleanup/deletion
-                scheduled_events[event_id]['poster_path'] = poster_image
-                save_scheduled_events()
-        except Exception as e:
-            print(f"Error creating poster: {e}")
-            poster_image = None
-    else:
-        print("No template images found in Templates folder")
-    
-    # Create event embed with new format
-    embed = discord.Embed(
-        title="Schedule",
-        description=f"🗓️ {team_1_captain.display_name} VS {team_2_captain.display_name}",
-        color=discord.Color.blue(),
-        timestamp=discord.utils.utcnow()
-    )
-    
-    # Tournament and Time Information
-    # Create Discord timestamp for automatic timezone conversion
-    timestamp = int(event_datetime.timestamp())
-    # Build event details text
-    event_details = f"**Tournament:** {tournament}\n"
-    event_details += f"**Mode:** {mode_label}\n"
-    event_details += f"**UTC Time:** {time_info['utc_time']}\n"
-    event_details += f"**Local Time:** <t:{timestamp}:F> (<t:{timestamp}:R>)\n"
-    event_details += f"**Round:** {round_label}\n"
-    
-    # Add group if specified
-    if group_label:
-        event_details += f"**Group:** {group_label}\n"
-    
-    event_details += f"**Channel:** {interaction.channel.mention}"
-    
-    embed.add_field(
-        name="📋 Event Details", 
-        value=event_details,
-        inline=False
-    )
-    # Add spacing
-    embed.add_field(name="\u200b", value="\u200b", inline=False)
-    
-    # Captains Section
-    captains_text = f"**Captains**\n"
-    captains_text += f"▪ Team1 Captain: {team_1_captain.mention} @{team_1_captain.name}\n"
-    captains_text += f"▪ Team2 Captain: {team_2_captain.mention} @{team_2_captain.name}"
-    embed.add_field(name="👑 Team Captains", value=captains_text, inline=False)
-    
-    # Add spacing
-    embed.add_field(name="\u200b", value="\u200b", inline=False)
-    
-    embed.add_field(name="👤 Created By", value=interaction.user.mention, inline=False)
-    
-    # Add poster image if available
-    if poster_image:
-        try:
-            with open(poster_image, 'rb') as f:
-                file = discord.File(f, filename="event_poster.png")
-                embed.set_image(url="attachment://event_poster.png")
-        except Exception as e:
-            print(f"Error loading poster image: {e}")
-    
-    embed.set_footer(text=f"Powered by • {ORGANIZATION_NAME}")
-    
-    # Create Take Schedule button
-    take_schedule_view = TakeScheduleButton(event_id, team_1_captain, team_2_captain, interaction.channel)
-    
-    # Send confirmation to user
-    await interaction.followup.send("✅ Event created and posted to both channels! Reminder will ping captains 10 minutes before start.", ephemeral=True)
-    
-    # Post in Take-Schedule channel (with button)
+    # Create datetime object for the event
     try:
+        current_year = datetime.datetime.now().year
+        event_datetime = datetime.datetime(current_year, month, date, hour, minute)
+        
+        # Calculate time difference and UTC formatting
+        time_info = calculate_time_difference(event_datetime)
+        
+        # Team formatting matching request: team strings + captain mentions
+        # Generate event poster
+        poster_image = None
+        template = get_random_template(mode.value)
+        if template:
+            poster_image = create_event_poster(
+                template, 
+                round.value, 
+                t1_display, 
+                t2_display, 
+                time_info['utc_time_simple'],
+                f"{date:02d}/{month:02d}"
+            )
+        
+        # Create event data
+        event_id = f"EVT-{int(datetime.datetime.now().timestamp())}"
+        round_label = round.value
+        group_label = group.value if group else None
+        
+        event_data = {
+            'id': event_id,
+            'team1_captain': t1_full,
+            'team2_captain': t2_full,
+            'team1_name': team1,
+            'team2_name': team2,
+            'datetime': event_datetime,
+            'time_str': time_info['utc_time'],
+            'date_str': f"{date:02d}/{month:02d}",
+            'round': round_label,
+            'tournament': tournament,
+            'mode': mode.value,
+            'group': group_label,
+            'channel_id': interaction.channel.id,
+            'created_at': datetime.datetime.now().isoformat(),
+            'created_by': interaction.user.id,
+            'status': 'scheduled',
+            'poster_path': poster_image,
+            'captain1_id': captain1.id if captain1 else None,
+            'captain2_id': captain2.id if captain2 else None
+        }
+        
+        sheet_manager.log_event_creation(event_data)
+        
+        print(f"📝 Event {event_id} created internally for {team1} vs {team2}")
+        
+        # Store event data for reminders
+        scheduled_events[event_id] = event_data
+        
+        # Save events to file
+        save_scheduled_events()
+        print(f"💾 Event {event_id} saved to file")
+        
+        # Create event embed with new format
+        embed = discord.Embed(
+            title="Schedule",
+            description=f"🗓️ {team1} VS {team2}",
+            color=discord.Color.blue(),
+            timestamp=discord.utils.utcnow()
+        )
+        
+        # Tournament and Time Information
+        timestamp = int(event_datetime.timestamp())
+        event_details = f"**Tournament:** {tournament}\n"
+        event_details += f"**Mode:** {mode.value}\n"
+        event_details += f"**UTC Time:** {time_info['utc_time']}\n"
+        event_details += f"**Local Time:** <t:{timestamp}:F> (<t:{timestamp}:R>)\n"
+        event_details += f"**Round:** {round_label}\n"
+        
+        if group_label:
+            event_details += f"**Group:** {group_label}\n"
+        
+        event_details += f"**Channel:** {interaction.channel.mention}"
+        
+        embed.add_field(
+            name="📋 Event Details", 
+            value=event_details,
+            inline=False
+        )
+        
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+        
+        # Captains Section
+        captains_text = f"**Captains/Teams**\n"
+        captains_text += f"▪ Team 1: {t1_full}\n"
+        captains_text += f"▪ Team 2: {t2_full}"
+        embed.add_field(name="👑 Match-up", value=captains_text, inline=False)
+        
+        embed.add_field(name="\u200b", value="\u200b", inline=False)
+        embed.add_field(name="👤 Created By", value=interaction.user.mention, inline=False)
+        
+        if poster_image:
+            try:
+                with open(poster_image, 'rb') as f:
+                    file = discord.File(f, filename="event_poster.png")
+                    embed.set_image(url="attachment://event_poster.png")
+            except Exception as e:
+                print(f"Error loading poster image: {e}")
+        
+        embed.set_footer(text=f"Powered by • {ORGANIZATION_NAME}")
+        
+        # Create Take Schedule button
+        take_schedule_view = TakeScheduleButton(event_id, t1_full, t2_full, interaction.channel)
+        
+        await interaction.followup.send("✅ Event created and posted to both channels!", ephemeral=True)
+        
+        # Post in Take-Schedule channel
         schedule_channel = interaction.guild.get_channel(CHANNEL_IDS["take_schedule"])
         if schedule_channel:
             judge_ping = f"<@&{ROLE_IDS['judge']}>"
@@ -3401,76 +3399,49 @@ async def event_create(
             else:
                 schedule_message = await schedule_channel.send(content=judge_ping, embed=embed, view=take_schedule_view)
             
-            # Store the message ID for later deletion
-            scheduled_events[event_id]['schedule_message_id'] = schedule_message.id
-            scheduled_events[event_id]['schedule_channel_id'] = schedule_channel.id
-        else:
-            await interaction.followup.send("⚠️ Could not find Take-Schedule channel.", ephemeral=True)
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ Could not post in Take-Schedule channel: {e}", ephemeral=True)
-    
-    # Post in the channel where command was used (without button)
-    try:
+            event_data['schedule_message_id'] = schedule_message.id
+            event_data['schedule_channel_id'] = schedule_channel.id
+            save_scheduled_events()
+            
+        # Post in the current channel
         if poster_image:
             with open(poster_image, 'rb') as f:
                 file = discord.File(f, filename="event_poster.png")
                 await interaction.channel.send(embed=embed, file=file)
         else:
             await interaction.channel.send(embed=embed)
+ 
+        await schedule_ten_minute_reminder(event_id, t1_full, t2_full, None, interaction.channel, event_datetime)
 
-        # Schedule the 10-minute reminder
-        await schedule_ten_minute_reminder(event_id, team_1_captain, team_2_captain, None, interaction.channel, event_datetime)
-        
     except Exception as e:
-        await interaction.followup.send(f"⚠️ Could not post in current channel: {e}", ephemeral=True)
+        print(f"Error in event_create: {e}")
+        await interaction.followup.send(f"⚠️ Error creating event: {e}", ephemeral=True)
 
-@tree.command(name="event-result", description="Add event results (Head Organizer/Judge only)")
+@events_group.command(name="results", description="Add event results.")
 @app_commands.describe(
-    winner="Winner of the event",
-    winner_score="Winner's score",
-    loser="Loser of the event", 
-    loser_score="Loser's score",
-    tournament="Tournament name (e.g., The Zumwalt S2)",
-    round="Round name (e.g., Semi-Final, Final, Quarter-Final)",
-    group="Group assignment (A-J) - optional",
-    remarks="Remarks about the match (e.g., ggwp, close match)",
-    ss_1="Screenshot 1 (upload)",
-    ss_2="Screenshot 2 (upload)",
-    ss_3="Screenshot 3 (upload)",
-    ss_4="Screenshot 4 (upload)",
-    ss_5="Screenshot 5 (upload)",
-    ss_6="Screenshot 6 (upload)",
-    ss_7="Screenshot 7 (upload)",
-    ss_8="Screenshot 8 (upload)",
-    ss_9="Screenshot 9 (upload)",
-    ss_10="Screenshot 10 (upload)",
-    ss_11="Screenshot 11 (upload)"
+    event="Event name or ID (optional, defaults to current channel event)",
+    team1_score="Score for Team 1",
+    team2_score="Score for Team 2",
+    number_of_matches="Total number of matches played",
+    remarks="Remarks about the match",
+    ss_1="Screenshot 1",
+    ss_2="Screenshot 2",
+    ss_3="Screenshot 3",
+    ss_4="Screenshot 4",
+    ss_5="Screenshot 5",
+    ss_6="Screenshot 6",
+    ss_7="Screenshot 7",
+    ss_8="Screenshot 8",
+    ss_9="Screenshot 9",
+    ss_10="Screenshot 10",
+    ss_11="Screenshot 11"
 )
-@app_commands.choices(
-    group=[
-        app_commands.Choice(name="Group A", value="Group A"),
-        app_commands.Choice(name="Group B", value="Group B"),
-        app_commands.Choice(name="Group C", value="Group C"),
-        app_commands.Choice(name="Group D", value="Group D"),
-        app_commands.Choice(name="Group E", value="Group E"),
-        app_commands.Choice(name="Group F", value="Group F"),
-        app_commands.Choice(name="Group G", value="Group G"),
-        app_commands.Choice(name="Group H", value="Group H"),
-        app_commands.Choice(name="Group I", value="Group I"),
-        app_commands.Choice(name="Group J", value="Group J"),
-        app_commands.Choice(name="Winner", value="Winner"),
-        app_commands.Choice(name="Loser", value="Loser"),
-    ]
-)
-async def event_result(
+async def results(
     interaction: discord.Interaction,
-    winner: discord.Member,
-    winner_score: int,
-    loser: discord.Member,
-    loser_score: int,
-    tournament: str,
-    round: str,
-    group: app_commands.Choice[str] = None,
+    team1_score: int,
+    team2_score: int,
+    event: str = None,
+    number_of_matches: int = 1,
     remarks: str = "ggwp",
     ss_1: discord.Attachment = None,
     ss_2: discord.Attachment = None,
@@ -3494,20 +3465,62 @@ async def event_result(
         await interaction.followup.send("❌ You need **Head Organizer** or **Judge** role to post event results.", ephemeral=True)
         return
 
+    # Find event logic
+    current_channel_id = interaction.channel.id
+    event_id_found = None
+    event_data = None
+    
+    if event:
+        # Try to find by event name or ID if provided
+        for ev_id, data in scheduled_events.items():
+            if ev_id == event or event.lower() in str(data.get('team1_name', '')).lower() or event.lower() in str(data.get('team2_name', '')).lower():
+                event_id_found = ev_id
+                event_data = data
+                break
+    
+    if not event_data:
+        # Fallback to current channel
+        for ev_id, data in scheduled_events.items():
+            if data.get('channel_id') == current_channel_id:
+                event_id_found = ev_id
+                event_data = data
+                break
+            
+    if not event_data:
+        await interaction.followup.send("❌ No event found. Please provide an event name or run this in a ticket channel.", ephemeral=True)
+        return
+
+    # Extract info from event data
+    team_1 = event_data.get('team1_captain')
+    team_2 = event_data.get('team2_captain')
+    t1_name = event_data.get('team1_name', team_1)
+    t2_name = event_data.get('team2_name', team_2)
+    tournament = event_data.get('tournament', 'N/A')
+    round_label = event_data.get('round', 'N/A')
+    group_label = event_data.get('group')
+
+    # Determine winner and loser
+    if team1_score > team2_score:
+        winner, winner_score = team_1, team1_score
+        winner_name = t1_name
+        loser, loser_score = team_2, team2_score
+        loser_name = t2_name
+    else:
+        winner, winner_score = team_2, team2_score
+        winner_name = t2_name
+        loser, loser_score = team_1, team1_score
+        loser_name = t1_name
+    
     # Validate scores
-    if winner_score < 0 or loser_score < 0:
+    if team_1_score < 0 or team_2_score < 0:
         await interaction.followup.send("❌ Scores cannot be negative", ephemeral=True)
         return
             
-    # Resolve group label from choice
-    group_label = group.value if group and isinstance(group, app_commands.Choice) else None
-            
-    # Create results embed matching the exact template format
-    embed_description = f"🗓️ {winner.display_name} Vs {loser.display_name}\n"
+    # Create results embed
+    embed_description = f"🗓️ {team_1} Vs {team_2}\n"
     embed_description += f"**Tournament:** {tournament}\n"
-    embed_description += f"**Round:** {round}"
+    embed_description += f"**Round:** {round_label}"
     
-    # Add group if specified
     if group_label:
         embed_description += f"\n**Group:** {group_label}"
     
@@ -3518,353 +3531,149 @@ async def event_result(
         timestamp=discord.utils.utcnow()
     )
     
-    # Captains Section
-    captains_text = f"**Captains**\n"
-    captains_text += f"▪ Team1 Captain: {winner.mention} `@{winner.name}`\n"
-    captains_text += f"▪ Team2 Captain: {loser.mention} `@{loser.name}`"
-    embed.add_field(name="", value=captains_text, inline=False)
-    
-    
-    # Add spacing
+    embed.add_field(name="👑 Match-up", value=f"▪ Team 1: {team_1}\n▪ Team 2: {team_2}", inline=False)
     embed.add_field(name="\u200b", value="\u200b", inline=False) 
     
-    # Results Section
-    results_text = f"**Results**\n"
-    results_text += f"🏆 {winner.display_name} ({winner_score}) Vs ({loser_score}) {loser.display_name} 💀"
-    embed.add_field(name="", value=results_text, inline=False)
-    
-    # Add spacing
+    results_text = f"🏆 {winner} ({winner_score}) Vs ({loser_score}) {loser} 💀"
+    embed.add_field(name="Results", value=results_text, inline=False)
     embed.add_field(name="\u200b", value="\u200b", inline=False)
     
-    # Staff Section
-    staff_text = f"👨‍⚖️ **Staffs**\n"
-    staff_text += f"▪ Judge: {interaction.user.mention}\n"
-    
-    # Try to find recorder from scheduled event to add to embed
-    recorder_mention = "None"
-    # Find event logic (simplified for immediate response)
-    # We can try to look up the event if we had the ID, but here we just have parameters.
-    # However, we can try to guess or just leave it for the sheet log mostly.
-    # User wanted "all event details — including the Recorder’s information... included in the sheet"
-    # And "event winner will be posted by Judge"
-    # I will look up the event based on captains/channel to find the Recorder.
-    
-    current_recorder = None
-    event_id_found = None
-    
-    try:
-        current_channel_id = interaction.channel.id
-        for ev_id, data in scheduled_events.items():
-            if data.get('channel_id') == current_channel_id:
-                # Check captains match
-                t1 = getattr(data.get('team1_captain'), 'id', None)
-                t2 = getattr(data.get('team2_captain'), 'id', None)
-                if winner.id in (t1, t2) and loser.id in (t1, t2):
-                    current_recorder = data.get('recorder')
-                    event_id_found = ev_id
-                    break
-    except Exception:
-        pass
-
+    staff_text = f"👨‍⚖️ **Staffs**\n▪ Judge: {interaction.user.mention}\n"
+    current_recorder = event_data.get('recorder')
     if current_recorder:
-        staff_text += f"▪ Recorder: {current_recorder.mention}"
+        if isinstance(current_recorder, int):
+            staff_text += f"▪ Recorder: <@{current_recorder}>"
+        elif hasattr(current_recorder, 'mention'):
+            staff_text += f"▪ Recorder: {current_recorder.mention}"
+        else:
+            staff_text += f"▪ Recorder: {current_recorder}"
+    else:
+        staff_text += "▪ Recorder: None"
         
-    embed.add_field(name="", value=staff_text, inline=False)
-    
+    embed.add_field(name="Staffs", value=staff_text, inline=False)
+    embed.add_field(name="📝 Remarks", value=remarks, inline=False)
+
     # Log Result to Sheet
     if event_id_found:
-        score_combined = f"{winner.display_name} ({winner_score}) - ({loser_score}) {loser.display_name}"
-        sheet_manager.log_event_result(event_id_found, winner.name, score_combined, remarks)
+        score_combined = f"{t1_name} ({team_1_score}) - {t2_name} ({team_2_score})"
+        sheet_manager.log_event_result(event_id_found, winner_name, score_combined, remarks)
 
-    
-    # Add spacing
-    embed.add_field(name="\u200b", value="\u200b", inline=False)
-    
-    # Remarks Section
-    embed.add_field(name="📝 Remarks", value=remarks, inline=False)
-    
-    # Handle screenshots - collect them and send as files (no image embeds)
+    # Handle screenshots
     screenshots = [ss_1, ss_2, ss_3, ss_4, ss_5, ss_6, ss_7, ss_8, ss_9, ss_10, ss_11]
     files_to_send = []
     screenshot_names = []
     
     for i, screenshot in enumerate(screenshots, 1):
         if screenshot:
-            # Create a file object for each screenshot
             try:
                 file_data = await screenshot.read()
-                file_obj = discord.File(
-                    fp=io.BytesIO(file_data),
-                    filename=f"SS-{i}_{screenshot.filename}"
-                )
+                file_obj = discord.File(fp=io.BytesIO(file_data), filename=f"SS-{i}_{screenshot.filename}")
                 files_to_send.append(file_obj)
                 screenshot_names.append(f"SS-{i}")
             except Exception as e:
                 print(f"Error processing screenshot {i}: {e}")
     
-    # Add screenshot section if any screenshots were provided
     if screenshot_names:
-        screenshot_text = f"**Screenshots of Result ({len(screenshot_names)} images)**\n"
-        screenshot_text += f"📷 {' • '.join(screenshot_names)}"
-        embed.add_field(name="", value=screenshot_text, inline=False)
+        embed.add_field(name="📷 Proof", value=f"Proof of Result ({len(screenshot_names)} images): {' • '.join(screenshot_names)}", inline=False)
     
     embed.set_footer(text=f"Powered by • {ORGANIZATION_NAME}")
     
-    # Send confirmation to user
-    await interaction.followup.send("✅ Event results posted to Results channel, current channel, and Staff Attendance logged!", ephemeral=True)
-    
-    # Update staff statistics
-    try:
-        # Update judge stats
-        update_staff_stats(interaction.user.id, interaction.user.display_name, "Judge")
-        print(f"Updated judge stats for {interaction.user.display_name}")
-        
-        # Check for recorder
-        current_channel_id = interaction.channel.id
-        for ev_id, data in scheduled_events.items():
-            if data.get('channel_id') == current_channel_id:
-                recorder = data.get('recorder')
-                if recorder and isinstance(recorder, (discord.Member, discord.User)):
-                     update_staff_stats(recorder.id, recorder.display_name, "Recorder")
-                     print(f"Updated recorder stats for {recorder.display_name}")
-                elif recorder and isinstance(recorder, int):
-                     # Try to fetch member if we only have ID
-                     try:
-                        mem = interaction.guild.get_member(recorder)
-                        if mem:
-                            update_staff_stats(mem.id, mem.display_name, "Recorder")
-                     except: pass
-                break
-                
-    except Exception as e:
-        print(f"Error updating staff stats: {e}")
-    
-    # Post in Results channel with screenshots as attachments
-    results_posted = False
+    # Post to Results Channel
     try:
         results_channel = interaction.guild.get_channel(CHANNEL_IDS["results"])
         if results_channel:
-            if files_to_send:
-                # Create copies of files for results channel (files can only be used once)
-                results_files = []
-                for file_obj in files_to_send:
-                    file_obj.fp.seek(0)  # Reset file pointer
-                    file_data = file_obj.fp.read()
-                    results_files.append(discord.File(
-                        fp=io.BytesIO(file_data),
-                        filename=file_obj.filename
-                    ))
-                await results_channel.send(embed=embed, files=results_files)
-            else:
-                await results_channel.send(embed=embed)
-            results_posted = True
-        else:
-            await interaction.followup.send("⚠️ Could not find Results channel.", ephemeral=True)
+            # We need to recreate files for each send since fp is consumed
+            fs = []
+            for i, screenshot in enumerate(screenshots, 1):
+                if screenshot:
+                    await screenshot.seek(0)
+                    d = await screenshot.read()
+                    fs.append(discord.File(fp=io.BytesIO(d), filename=f"SS-{i}_{screenshot.filename}"))
+            await results_channel.send(embed=embed, files=fs)
     except Exception as e:
-        await interaction.followup.send(f"⚠️ Could not post in Results channel: {e}", ephemeral=True)
-    
-    # Post in current channel (where command was executed)
-    try:
-        current_channel = interaction.channel
-        if current_channel and current_channel.id != CHANNEL_IDS["results"]:  # Don't duplicate if already in results channel
-            if files_to_send:
-                # Reset file pointers and create new file objects for current channel
-                current_files = []
-                for file_obj in files_to_send:
-                    file_obj.fp.seek(0)  # Reset file pointer
-                    file_data = file_obj.fp.read()
-                    current_files.append(discord.File(
-                        fp=io.BytesIO(file_data),
-                        filename=file_obj.filename
-                    ))
-                await current_channel.send(embed=embed, files=current_files)
-            else:
-                await current_channel.send(embed=embed)
-        elif current_channel and current_channel.id == CHANNEL_IDS["results"] and not results_posted:
-            # If we're in results channel but posting failed above, try again
-            if files_to_send:
-                await current_channel.send(embed=embed, files=files_to_send)
-            else:
-                await current_channel.send(embed=embed)
-    except Exception as e:
-        await interaction.followup.send(f"⚠️ Could not post in current channel: {e}", ephemeral=True)
+        print(f"Error posting to results: {e}")
 
-    # Winner-only summary removed per request
-    
-    # Post staff attendance in Staff Attendance channel
+    # Post to Current Channel
+    try:
+        fs = []
+        for i, screenshot in enumerate(screenshots, 1):
+            if screenshot:
+                await screenshot.seek(0)
+                d = await screenshot.read()
+                fs.append(discord.File(fp=io.BytesIO(d), filename=f"SS-{i}_{screenshot.filename}"))
+        await interaction.channel.send(embed=embed, files=fs)
+    except Exception as e:
+        print(f"Error posting to current channel: {e}")
+
+    # Staff Attendance
     try:
         staff_attendance_channel = interaction.guild.get_channel(CHANNEL_IDS["staff_attendance"])
         if staff_attendance_channel:
-            # Create staff attendance message
-            attendance_text = f"🏅 {winner.mention} Vs {loser.mention}\n"
-            attendance_text += f"**Round :** {round}\n"
+            att_text = f"🏅 {team_1} Vs {team_2}\n**Round:** {round_label}\n"
+            if group_label: att_text += f"**Group:** {group_label}\n"
+            att_text += f"\n🏆 {winner} ({winner_score}) Vs ({loser_score}) {loser} 💀\n\n"
+            att_text += f"**Staffs**\n• Judge: {interaction.user.mention}\n"
+            rec_id = event_data.get('recorder')
+            att_text += f"• Recorder: <@{rec_id}>" if rec_id else "• Recorder: None"
+            await staff_attendance_channel.send(att_text)
             
-            # Add group if specified
-            if group_label:
-                attendance_text += f"**Group :** {group_label}\n"
+            # Log to sheet
+            dt_now = datetime.datetime.now()
+            date_s = dt_now.strftime("%Y-%m-%d")
+            time_s = dt_now.strftime("%H:%M:%S")
             
-            attendance_text += f"\n**Results**\n"
-            attendance_text += f"🏆 {winner.mention} ({winner_score}) Vs ({loser_score}) {loser.mention} 💀\n\n"
-            attendance_text += f"**Staffs**\n"
-            attendance_text += f"• Judge: {interaction.user.mention}\n"
+            sheet_manager.log_attendance(
+                date_str=date_s, 
+                time_str=time_s, 
+                event_name=f"{t1_name} vs {t2_name} ({round_label})", 
+                role="Judge", 
+                staff_name=interaction.user.name, 
+                marked_by=interaction.user.name
+            )
             
-            # Attempt to find the recorder from the scheduled events if possible
-            recorder_mention = "None/Unassigned"
-            recorder_obj_for_sheet = "Unassigned"
-            
-            current_channel_id = interaction.channel.id
-            found_event_for_recorder = False
-            
-            for ev_id, data in scheduled_events.items():
-                if data.get('channel_id') == current_channel_id:
-                    matched_rec = data.get('recorder')
-                    if matched_rec:
-                        # It might be an ID or an object, handle both
-                        if isinstance(matched_rec, (int, str)):
-                             recorder_mention = f"<@{matched_rec}>"
-                             recorder_obj_for_sheet = str(matched_rec)
-                        else:
-                             recorder_mention = matched_rec.mention
-                             recorder_obj_for_sheet = matched_rec.name
-                    found_event_for_recorder = True
-                    break
-            
-            attendance_text += f"• Recorder: {recorder_mention}"
-            
-            await staff_attendance_channel.send(attendance_text)
-            
-            # Log attendance to Google Sheet
-            try:
-                dt_now = datetime.datetime.now()
-                date_str = dt_now.strftime("%Y-%m-%d")
-                time_str = dt_now.strftime("%H:%M:%S")
+            if rec_id:
+                rec_name = "Unknown"
+                if isinstance(rec_id, int):
+                    m = interaction.guild.get_member(rec_id)
+                    if m: rec_name = m.name
+                elif hasattr(rec_id, 'name'):
+                    rec_name = rec_id.name
                 
-                # Log Judge
                 sheet_manager.log_attendance(
-                    date_str=date_str,
-                    time_str=time_str,
-                    event_name=f"{winner.display_name} vs {loser.display_name} ({round})",
-                    role="Judge",
-                    staff_name=interaction.user.name,
+                    date_str=date_s, 
+                    time_str=time_s, 
+                    event_name=f"{t1_name} vs {t2_name} ({round_label})", 
+                    role="Recorder", 
+                    staff_name=rec_name, 
                     marked_by=interaction.user.name
                 )
-                
-                # Log Recorder if found
-                if recorder_obj_for_sheet != "Unassigned":
-                     sheet_manager.log_attendance(
-                        date_str=date_str,
-                        time_str=time_str,
-                        event_name=f"{winner.display_name} vs {loser.display_name} ({round})",
-                        role="Recorder",
-                        staff_name=recorder_obj_for_sheet,
-                        marked_by=interaction.user.name
-                    )
-            except Exception as e:
-                print(f"Error logging attendance to sheet from event result: {e}")
-                
-        else:
-            print("⚠️ Could not find Staff Attendance channel.")
     except Exception as e:
-        print(f"⚠️ Could not post in Staff Attendance channel: {e}")
+        print(f"Error with staff attendance: {e}")
 
-    # Schedule auto-cleanup of matching events in this channel after 36 hours
-    try:
-        current_channel_id = interaction.channel.id if interaction.channel else None
-        matching_event_ids = []
-        for ev_id, data in scheduled_events.items():
-            if data.get('channel_id') == current_channel_id:
-                # Optional: further match by captains to be safer
-                try:
-                    t1 = getattr(data.get('team1_captain'), 'id', None)
-                    t2 = getattr(data.get('team2_captain'), 'id', None)
-                    if winner.id in (t1, t2) and loser.id in (t1, t2):
-                        matching_event_ids.append(ev_id)
-                        
-                        # Update the event with result data
-                        scheduled_events[ev_id]['result_added'] = True
-                        scheduled_events[ev_id]['result_winner'] = winner
-                        scheduled_events[ev_id]['result_loser'] = loser
-                        scheduled_events[ev_id]['result_winner_score'] = winner_score
-                        scheduled_events[ev_id]['result_loser_score'] = loser_score
-                        scheduled_events[ev_id]['result_judge'] = interaction.user
-                        scheduled_events[ev_id]['result_group'] = group_label
-                        scheduled_events[ev_id]['result_remarks'] = remarks
-                        
-                        print(f"Updated event {ev_id} with result data")
-                except Exception as e:
-                    print(f"Error updating event {ev_id}: {e}")
-                    matching_event_ids.append(ev_id)
+    # Update event status
+    event_data['result_added'] = True
+    event_data['team1_score'] = team1_score
+    event_data['team2_score'] = team2_score
+    event_data['number_of_matches'] = number_of_matches
+    event_data['winner'] = winner
+    event_data['status'] = 'completed'
+    save_scheduled_events()
+    
+    # Auto cleanup
+    await schedule_event_cleanup(event_id_found, delay_hours=2)
+    
+    # Update stats
+    update_staff_stats(interaction.user.id, interaction.user.display_name, "Judge")
+    rec_val = event_data.get('recorder')
+    if rec_val:
+        if isinstance(rec_val, int):
+            m = interaction.guild.get_member(rec_val)
+            if m: update_staff_stats(m.id, m.display_name, "Recorder")
+        elif hasattr(rec_val, 'id'):
+            update_staff_stats(rec_val.id, rec_val.display_name, "Recorder")
 
-        # Save updated events
-        if matching_event_ids:
-            save_scheduled_events()
-
-        scheduled_any = False
-        for ev_id in matching_event_ids:
-            # Update the original schedule message title with checkmark
-            try:
-                event_data = scheduled_events.get(ev_id)
-                if event_data:
-                    schedule_channel_id = event_data.get('schedule_channel_id')
-                    schedule_message_id = event_data.get('schedule_message_id')
-                    
-                    if schedule_channel_id and schedule_message_id:
-                        schedule_channel = interaction.guild.get_channel(schedule_channel_id)
-                        if schedule_channel:
-                            try:
-                                schedule_message = await schedule_channel.fetch_message(schedule_message_id)
-                                if schedule_message.embeds:
-                                    embed = schedule_message.embeds[0]
-                                    # Update title with checkmark
-                                    if update_embed_title_with_checkmark(embed):
-                                        try:
-                                            await schedule_message.edit(embed=embed)
-                                            print(f"Updated schedule title with checkmark for event {ev_id}")
-                                        except discord.Forbidden:
-                                            print(f"Bot doesn't have permission to edit message in channel {schedule_channel.name}")
-                                        except Exception as edit_error:
-                                            print(f"Error editing schedule message for event {ev_id}: {edit_error}")
-                            except discord.NotFound:
-                                print(f"Schedule message not found for event {ev_id}")
-                            except Exception as e:
-                                print(f"Error updating schedule title for event {ev_id}: {e}")
-            except Exception as e:
-                print(f"Error processing title update for event {ev_id}: {e}")
-            
-            await schedule_event_cleanup(ev_id, delay_hours=2)
-            scheduled_any = True
+    await interaction.followup.send("✅ Results processed and cleanup scheduled (2h).", ephemeral=True)
         
-        # Also update any schedule messages in the current channel
-        try:
-            current_channel = interaction.channel
-            if current_channel:
-                # Look for recent messages in current channel that might be schedule messages
-                async for message in current_channel.history(limit=50):
-                    if message.embeds and message.author == bot.user:
-                        embed = message.embeds[0]
-                        # Check if this looks like a schedule message with green circle
-                        if embed.title and embed.title.startswith("🟢"):
-                            # Check if this matches our winner/loser
-                            description = embed.description or ""
-                            if (winner.display_name in description and loser.display_name in description) or \
-                               (winner.mention in description and loser.mention in description):
-                                if update_embed_title_with_checkmark(embed):
-                                    try:
-                                        await message.edit(embed=embed)
-                                        print(f"Updated current channel schedule title with checkmark")
-                                    except discord.Forbidden:
-                                        print(f"Bot doesn't have permission to edit message in current channel")
-                                    except Exception as edit_error:
-                                        print(f"Error editing current channel message: {edit_error}")
-                                break
-        except Exception as e:
-            print(f"Error updating current channel schedule title: {e}")
-
-        if scheduled_any:
-            await interaction.followup.send("🧹 Auto-cleanup scheduled: Related event(s) will be removed after 2 hours.", ephemeral=True)
-    except Exception as e:
-        print(f"Error scheduling auto-cleanup after results: {e}")
-
 @tree.command(name="time", description="Get a random match time from fixed 30-min slots (12:00-17:00 UTC)")
 async def time(interaction: discord.Interaction):
     """Pick a random time from 30-minute slots between 12:00 and 17:00 UTC and show all slots."""
@@ -3982,8 +3791,8 @@ async def unassigned_events(interaction: discord.Interaction):
         except Exception:
             pass
 
-@tree.command(name="event-delete", description="Delete a scheduled event (Head Organizer/Head Helper/Helper Team only)")
-async def event_delete(interaction: discord.Interaction):
+@events_group.command(name="delete", description="Delete a scheduled event.")
+async def delete(interaction: discord.Interaction):
     # Check permissions - only Head Organizer, Head Helper or Helper Team (and Bot Owner)
     if not has_event_create_permission(interaction):
         await interaction.response.send_message("❌ You need **Head Organizer**, **Head Helper** or **Helper Team** role to delete events.", ephemeral=True)
@@ -4004,7 +3813,7 @@ async def event_delete(interaction: discord.Interaction):
                 placeholder="Select an event to delete...",
                 options=[
                     discord.SelectOption(
-                        label=f"{event_data.get('team1_captain').display_name if event_data.get('team1_captain') else 'Unknown'} VS {event_data.get('team2_captain').display_name if event_data.get('team2_captain') else 'Unknown'}",
+                        label=f"{event_data.get('team1_name', 'Unknown')} VS {event_data.get('team2_name', 'Unknown')}",
                         description=f"{event_data.get('round', 'Unknown Round')} - {event_data.get('date_str', 'No date')} at {event_data.get('time_str', 'No time')}",
                         value=event_id
                     )
@@ -4112,17 +3921,19 @@ async def event_delete(interaction: discord.Interaction):
         await interaction.response.send_message(f"❌ Error: {str(e)}", ephemeral=True)
 
 
-@tree.command(name="event-edit", description="Edit the event in this ticket channel (Head Organizer/Head Helper/Helper Team only)")
+@events_group.command(name="edit", description="Edit an event. Fill in the fields you want to change.")
 @app_commands.describe(
-    team_1_captain="Captain of team 1 (optional)",
-    team_2_captain="Captain of team 2 (optional)", 
-    hour="Hour of the event (0-23) (optional)",
-    minute="Minute of the event (0-59) (optional)",
-    date="Date of the event (optional)",
-    month="Month of the event (optional)",
-    round="Round label (optional)",
-    tournament="Tournament name (optional)",
-    group="Group assignment (A-J) or Winner/Loser (optional)"
+    title="Event title or name (e.g. Tournament Name)",
+    captain1="New Team 1 Captain",
+    captain2="New Team 2 Captain",
+    team1="Update Team 1 Name",
+    team2="Update Team 2 Name",
+    hour="Update Hour (0-23)",
+    minute="Update Minute (0-59)",
+    date="Update Date",
+    month="Update Month",
+    round="Update Round",
+    group="Update Group"
 )
 @app_commands.choices(
     round=[
@@ -4155,16 +3966,18 @@ async def event_delete(interaction: discord.Interaction):
         app_commands.Choice(name="Loser", value="Loser"),
     ]
 )
-async def event_edit(
+async def edit(
     interaction: discord.Interaction,
-    team_1_captain: discord.Member = None,
-    team_2_captain: discord.Member = None,
+    title: str = None,
+    captain1: discord.Member = None,
+    captain2: discord.Member = None,
+    team1: str = None,
+    team2: str = None,
     hour: int = None,
     minute: int = None,
     date: int = None,
     month: int = None,
     round: app_commands.Choice[str] = None,
-    tournament: str = None,
     group: app_commands.Choice[str] = None
 ):
     """Edit the event in this ticket channel"""
@@ -4190,11 +4003,16 @@ async def event_edit(
             break
     
     if not event_to_edit:
-        await interaction.followup.send("❌ No event found in this ticket channel. Use `/event-create` to create an event first.", ephemeral=True)
+        await interaction.followup.send("❌ No event found in this ticket channel. Use `/events create` to create an event first.", ephemeral=True)
+        return
+    
+    # NEW: Check if match has already started
+    if datetime.datetime.now() > event_to_edit['datetime']:
+        await interaction.followup.send("❌ This match has already started or finished. You can no longer edit its details.", ephemeral=True)
         return
     
     # Check if at least one field is provided
-    if not any([team_1_captain, team_2_captain, hour is not None, minute is not None, date is not None, month is not None, round, tournament, group]):
+    if not any([title, captain1, captain2, team1, team2, hour is not None, minute is not None, date is not None, month is not None, round, group]):
         await interaction.followup.send("❌ Please provide at least one field to update.", ephemeral=True)
         return
     
@@ -4227,14 +4045,56 @@ async def event_edit(
         current_year = datetime.datetime.now().year
         new_datetime = datetime.datetime(current_year, current_month, current_date, current_hour, current_minute)
         
-        # Calculate time differences
-        time_info = calculate_time_difference(new_datetime)
-        
+        # Calculate time differences 
+        # (Check if calculate_time_difference is accessible or needs to be called)
+        time_info = calculate_time_difference(new_datetime) if 'calculate_time_difference' in globals() else {'utc_time': 'Unknown', 'minutes_remaining': 0}
+
         # Update only provided fields
-        if team_1_captain:
-            event_to_edit['team1_captain'] = team_1_captain
-        if team_2_captain:
-            event_to_edit['team2_captain'] = team_2_captain
+        if team1:
+            event_to_edit['team1_name'] = team1
+        if team2:
+            event_to_edit['team2_name'] = team2
+        # Use provided captain if any, else keep current
+        if captain1:
+            event_to_edit['captain1_id'] = captain1.id
+        if captain2:
+            event_to_edit['captain2_id'] = captain2.id
+        
+        # Rebuild display names (resolving mentions if they were typed in team fields)
+        def resolve_name(val):
+            if not val: return val
+            match = re.search(r'<@!?(\d+)>', str(val))
+            if match:
+                m_id = int(match.group(1))
+                m = interaction.guild.get_member(m_id)
+                if m: return m.display_name
+            return str(val)
+
+        t1_name = event_to_edit.get('team1_name', 'Team 1')
+        t2_name = event_to_edit.get('team2_name', 'Team 2')
+        c1_id = event_to_edit.get('captain1_id')
+        c2_id = event_to_edit.get('captain2_id')
+        
+        # Update display names for poster/other logic if needed
+        event_to_edit['team1_display_name'] = resolve_name(t1_name)
+        event_to_edit['team2_display_name'] = resolve_name(t2_name)
+
+        if c1_id: 
+            if str(t1_name).strip() == f"<@{c1_id}>" or str(t1_name).strip() == f"<@!{c1_id}>":
+                event_to_edit['team1_captain'] = f"<@{c1_id}>"
+            else:
+                event_to_edit['team1_captain'] = f"{t1_name} (<@{c1_id}>)"
+        else: 
+            event_to_edit['team1_captain'] = t1_name
+            
+        if c2_id: 
+             if str(t2_name).strip() == f"<@{c2_id}>" or str(t2_name).strip() == f"<@!{c2_id}>":
+                event_to_edit['team2_captain'] = f"<@{c2_id}>"
+             else:
+                event_to_edit['team2_captain'] = f"{t2_name} (<@{c2_id}>)"
+        else: 
+            event_to_edit['team2_captain'] = t2_name
+
         if hour is not None or minute is not None or date is not None or month is not None:
             event_to_edit['datetime'] = new_datetime
             event_to_edit['time_str'] = time_info['utc_time']
@@ -4243,8 +4103,8 @@ async def event_edit(
         if round:
             round_label = round.value if isinstance(round, app_commands.Choice) else str(round)
             event_to_edit['round'] = round_label
-        if tournament:
-            event_to_edit['tournament'] = tournament
+        if title:
+            event_to_edit['tournament'] = title
         if group:
             event_to_edit['group'] = group.value
         
@@ -4253,7 +4113,7 @@ async def event_edit(
         
         # Schedule the 10-minute reminder with updated event data
         try:
-            await schedule_ten_minute_reminder(event_id, team1_captain, team2_captain, event_to_edit.get('judge'), interaction.channel, new_datetime)
+            await schedule_ten_minute_reminder(event_id, event_to_edit.get('team1_captain'), event_to_edit.get('team2_captain'), event_to_edit.get('judge'), interaction.channel, new_datetime)
         except Exception as e:
             print(f"Error scheduling reminder for updated event {event_id}: {e}")
         
@@ -4277,8 +4137,8 @@ async def event_edit(
         # Event Details Section
         embed.add_field(
             name="📋 Updated Event Details", 
-            value=f"**Team 1 Captain:** {team1_captain.mention if team1_captain else 'Unknown'} `@{team1_captain.name if team1_captain else 'Unknown'}`\n"
-                  f"**Team 2 Captain:** {team2_captain.mention if team2_captain else 'Unknown'} `@{team2_captain.name if team2_captain else 'Unknown'}`\n"
+            value=f"**Team 1:** {team1_captain}\n"
+                  f"**Team 2:** {team2_captain}\n"
                   f"**UTC Time:** {time_info_display}\n"
                   f"**Local Time:** <t:{int(new_datetime.timestamp())}:F> (<t:{int(new_datetime.timestamp())}:R>)\n"
                   f"**Round:** {round_info}\n"
@@ -4298,9 +4158,9 @@ async def event_edit(
         embed.add_field(name="\u200b", value="\u200b", inline=False)
         
         # Captains Section
-        captains_text = f"**Captains**\n"
-        captains_text += f"▪ Team1 Captain: {team1_captain.mention if team1_captain else 'Unknown'} `@{team1_captain.name if team1_captain else 'Unknown'}`\n"
-        captains_text += f"▪ Team2 Captain: {team2_captain.mention if team2_captain else 'Unknown'} `@{team2_captain.name if team2_captain else 'Unknown'}`"
+        captains_text = f"**Captains/Teams**\n"
+        captains_text += f"▪ Team 1: {team1_captain}\n"
+        captains_text += f"▪ Team 2: {team2_captain}"
         embed.add_field(name="", value=captains_text, inline=False)
         
         embed.set_footer(text=f"Event Updated • {ORGANIZATION_NAME}")
@@ -4310,14 +4170,28 @@ async def event_edit(
         
         # Notify Judge and both Captains about the update
         judge = event_to_edit.get('judge')
-        notification_text = f"🔔 {team1_captain.mention} {team2_captain.mention}"
+        notification_text = f"🔔 {team1_captain} {team2_captain}"
         if judge:
+            if hasattr(judge, 'mention'):
                 notification_text += f" {judge.mention}"
+            else:
+                notification_text += f" <@{judge}>"
         
+        # Clean names for notify embed
+        def get_name(val):
+            match = re.search(r'<@!?(\d+)>', str(val))
+            if match:
+                 m = interaction.guild.get_member(int(match.group(1)))
+                 if m: return m.display_name
+            return str(val)
+
+        t1_notify_name = get_name(team1_captain)
+        t2_notify_name = get_name(team2_captain)
+
         notify_embed = discord.Embed(
             title="⚠️ Match Details Updated",
             description=f"The details for this match have been updated by {interaction.user.mention}.\n\n"
-                        f"**Teams:** {team1_captain.display_name} vs {team2_captain.display_name}\n"
+                        f"**Teams:** {t1_notify_name} vs {t2_notify_name}\n"
                         f"**Schedule:** {event_to_edit.get('time_str')} on {event_to_edit.get('date_str')}\n\n"
                         f"Please check the updated schedule details above.",
             color=discord.Color.gold(),
