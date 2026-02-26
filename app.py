@@ -2194,6 +2194,8 @@ async def send_ten_minute_reminder(event_id: str, team1_captain: discord.Member,
         team2_name = "Team 2"
         tournament_name = "Tournament"
         round_name = "Match"
+        resolved_judge = judge
+        resolved_recorder = None
         
         if event_id in scheduled_events:
             event_data = scheduled_events[event_id]
@@ -2906,6 +2908,21 @@ async def on_ready():
                             except Exception:
                                 pass
                         del scheduled_events[ev_id]
+                    elif data.get('status') == 'scheduled' or not data.get('status'):
+                        try:
+                            ch_id = data.get('channel_id')
+                            if ch_id:
+                                ch = bot.get_channel(int(ch_id))
+                                if ch:
+                                    bot.loop.create_task(schedule_event_reminder_v2(
+                                        ev_id, 
+                                        data.get('team1_captain'), 
+                                        data.get('team2_captain'), 
+                                        data.get('judge'), 
+                                        ch
+                                    ))
+                        except Exception as e:
+                            print(f"Failed to reschedule reminder {ev_id}: {e}")
             except Exception:
                 pass
         save_scheduled_events()
@@ -3033,6 +3050,81 @@ async def staff_leaderboard(interaction: discord.Interaction):
         print(f"Error in staff leaderboard command: {e}")
         message = "```\n❌ Error loading staff statistics. Please try again.\n```"
         await interaction.response.send_message(message)
+
+@tree.command(name="staff-update", description="Update a staff member's match count in the leaderboard")
+@app_commands.describe(
+    staff_member="The staff member to update",
+    role="Role to update (judge or recorder)",
+    action="Add, Subtract, or Set the count",
+    amount="The number of matches to add, subtract, or set to"
+)
+@app_commands.choices(
+    role=[
+        app_commands.Choice(name="Judge", value="judge"),
+        app_commands.Choice(name="Recorder", value="recorder")
+    ],
+    action=[
+        app_commands.Choice(name="Add (+)", value="add"),
+        app_commands.Choice(name="Subtract (-)", value="subtract"),
+        app_commands.Choice(name="Set (=)", value="set")
+    ]
+)
+async def staff_update(
+    interaction: discord.Interaction, 
+    staff_member: discord.Member, 
+    role: app_commands.Choice[str], 
+    action: app_commands.Choice[str], 
+    amount: int
+):
+    """Update staff statistics for a specific user"""
+    # Check if user has head organizer role
+    head_organizer_role_ids = ROLE_IDS.get("head_organizer", [])
+    has_permission = False
+    for r in interaction.user.roles:
+        if r.id in head_organizer_role_ids:
+            has_permission = True
+            break
+            
+    if not has_permission:
+        await interaction.response.send_message("❌ You need **Head Organizer** role to update staff statistics.", ephemeral=True)
+        return
+        
+    if amount < 0 and action.value != "subtract":
+        await interaction.response.send_message("❌ Amount cannot be negative.", ephemeral=True)
+        return
+        
+    global staff_stats
+    uid = str(staff_member.id)
+    
+    # Initialize if not exists
+    if uid not in staff_stats:
+        staff_stats[uid] = {
+            "name": staff_member.display_name,
+            "judge_count": 0,
+            "recorder_count": 0,
+            "last_activity": None
+        }
+    else:
+        # Update name in case it changed
+        staff_stats[uid]["name"] = staff_member.display_name
+        
+    role_key = f"{role.value}_count"
+    current_count = staff_stats[uid].get(role_key, 0)
+    
+    if action.value == "add":
+        new_count = current_count + amount
+    elif action.value == "subtract":
+        new_count = max(0, current_count - amount)
+    else: # set
+        new_count = max(0, amount)
+        
+    staff_stats[uid][role_key] = new_count
+    staff_stats[uid]["last_activity"] = datetime.datetime.utcnow()
+    
+    save_staff_stats()
+    
+    await interaction.response.send_message(f"✅ Successfully updated **{staff_member.display_name}**'s {role.name} count from {current_count} to **{new_count}**.", ephemeral=False)
+
 @tree.command(name="info", description="Display bot information and statistics")
 async def info_command(interaction: discord.Interaction):
     """Display bot information and server statistics"""
@@ -3548,7 +3640,7 @@ async def results(
         loser_name = t1_name
     
     # Validate scores
-    if team_1_score < 0 or team_2_score < 0:
+    if team1_score < 0 or team2_score < 0:
         await interaction.followup.send("❌ Scores cannot be negative", ephemeral=True)
         return
             
