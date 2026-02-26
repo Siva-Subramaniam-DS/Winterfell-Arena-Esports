@@ -209,7 +209,10 @@ ROLE_IDS = {
     "recorder": [1474281127643451543],
     "head_helper": [1473773791531372664],
     "helper_team": [1184587759487303790],
-    "head_organizer": [1473773782681518273, 1473773778415783986, 1473773779237863568, 1473773786419740700, 1473773780303347824] 
+    "head_organizer": [1474281212398014513],
+    "deputy_server_head":[1473773779237863568],
+    "Tournament_organizer":[1473773807939485757],
+    "Tournament_supervision":[1473773780303347824]
 }
 
 # Set Windows event loop policy for asyncio
@@ -1464,7 +1467,12 @@ def get_user_permission_level(user: discord.Member) -> str:
         role_ids = [role.id for role in user.roles]
         
         # Check for organizer roles
-        org_role_ids = ROLE_IDS["head_organizer"]
+        org_role_ids = (
+            ROLE_IDS.get("head_organizer", []) + 
+            ROLE_IDS.get("deputy_server_head", []) + 
+            ROLE_IDS.get("Tournament_organizer", []) + 
+            ROLE_IDS.get("Tournament_supervision", [])
+        )
         if any(rid in role_ids for rid in org_role_ids):
             return "organizer"
             
@@ -1581,7 +1589,13 @@ def has_organizer_permission(interaction):
     if interaction.user.id == BOT_OWNER_ID:
         return True
     user_role_ids = [role.id for role in interaction.user.roles]
-    return any(rid in user_role_ids for rid in ROLE_IDS["head_organizer"])
+    org_role_ids = (
+        ROLE_IDS.get("head_organizer", []) + 
+        ROLE_IDS.get("deputy_server_head", []) + 
+        ROLE_IDS.get("Tournament_organizer", []) + 
+        ROLE_IDS.get("Tournament_supervision", [])
+    )
+    return any(rid in user_role_ids for rid in org_role_ids)
 
 # Embed field utility functions for safe Discord.py embed manipulation
 def find_field_index(embed: discord.Embed, field_name: str) -> int:
@@ -2059,9 +2073,15 @@ class TakeScheduleButton(View):
         user_role_ids = [r.id for r in interaction.user.roles]
         
         allowed = False
+        org_role_ids = (
+            ROLE_IDS.get("head_organizer", []) + 
+            ROLE_IDS.get("deputy_server_head", []) + 
+            ROLE_IDS.get("Tournament_organizer", []) + 
+            ROLE_IDS.get("Tournament_supervision", [])
+        )
         if role_type == "judge":
             is_judge = any(rid in user_role_ids for rid in ROLE_IDS["judge"])
-            is_org = any(rid in user_role_ids for rid in ROLE_IDS["head_organizer"])
+            is_org = any(rid in user_role_ids for rid in org_role_ids)
             if is_judge or is_org:
                 allowed = True
             if self.judge:
@@ -2069,7 +2089,7 @@ class TakeScheduleButton(View):
                 return
         elif role_type == "recorder":
             is_recorder = any(rid in user_role_ids for rid in ROLE_IDS["recorder"])
-            is_org = any(rid in user_role_ids for rid in ROLE_IDS["head_organizer"])
+            is_org = any(rid in user_role_ids for rid in org_role_ids)
             if is_recorder or is_org:
                 allowed = True
             if self.recorder:
@@ -2875,7 +2895,14 @@ def has_event_create_permission(interaction):
     if interaction.user.id == BOT_OWNER_ID:
         return True
     user_role_ids = [role.id for role in interaction.user.roles]
-    staff_roles = ROLE_IDS["head_organizer"] + ROLE_IDS["head_helper"] + ROLE_IDS["helper_team"]
+    staff_roles = (
+        ROLE_IDS.get("head_organizer", []) + 
+        ROLE_IDS.get("deputy_server_head", []) + 
+        ROLE_IDS.get("Tournament_organizer", []) + 
+        ROLE_IDS.get("Tournament_supervision", []) +
+        ROLE_IDS.get("head_helper", []) + 
+        ROLE_IDS.get("helper_team", [])
+    )
     return any(rid in user_role_ids for rid in staff_roles)
 
 def has_event_result_permission(interaction):
@@ -2883,7 +2910,13 @@ def has_event_result_permission(interaction):
     if interaction.user.id == BOT_OWNER_ID:
         return True
     user_role_ids = [role.id for role in interaction.user.roles]
-    staff_roles = ROLE_IDS["head_organizer"] + ROLE_IDS["judge"]
+    staff_roles = (
+        ROLE_IDS.get("head_organizer", []) + 
+        ROLE_IDS.get("deputy_server_head", []) + 
+        ROLE_IDS.get("Tournament_organizer", []) + 
+        ROLE_IDS.get("Tournament_supervision", []) +
+        ROLE_IDS.get("judge", [])
+    )
     return any(rid in user_role_ids for rid in staff_roles)
 
 @bot.event
@@ -3140,8 +3173,16 @@ async def staff_leaderboard(interaction: discord.Interaction):
         message += "```"
 
         # Check if user is head organizer for reset button
-        head_organizer_role = discord.utils.get(interaction.user.roles, id=ROLE_IDS["head_organizer"])
-        if head_organizer_role:
+        user_role_ids = [role.id for role in interaction.user.roles]
+        org_role_ids = (
+            ROLE_IDS.get("head_organizer", []) + 
+            ROLE_IDS.get("deputy_server_head", []) + 
+            ROLE_IDS.get("Tournament_organizer", []) + 
+            ROLE_IDS.get("Tournament_supervision", [])
+        )
+        has_org_role = any(rid in user_role_ids for rid in org_role_ids)
+        
+        if has_org_role:
             view = JudgeLeaderboardView(show_reset=True)
             await interaction.response.send_message(message, view=view)
         else:
@@ -3179,12 +3220,13 @@ async def staff_update(
 ):
     """Update staff statistics for a specific user"""
     # Check if user has head organizer role
-    head_organizer_role_ids = ROLE_IDS.get("head_organizer", [])
-    has_permission = False
-    for r in interaction.user.roles:
-        if r.id in head_organizer_role_ids:
-            has_permission = True
-            break
+    org_role_ids = (
+        ROLE_IDS.get("head_organizer", []) + 
+        ROLE_IDS.get("deputy_server_head", []) + 
+        ROLE_IDS.get("Tournament_organizer", []) + 
+        ROLE_IDS.get("Tournament_supervision", [])
+    )
+    has_permission = any(r.id in org_role_ids for r in interaction.user.roles)
             
     if not has_permission:
         await interaction.response.send_message("❌ You need **Head Organizer** role to update staff statistics.", ephemeral=True)
@@ -3935,7 +3977,13 @@ async def unassigned_events(interaction: discord.Interaction):
     try:
         # Allow Head Organizer, Head Helper, Helper Team, and Judges to view
         user_role_ids = [role.id for role in interaction.user.roles]
-        is_org = any(rid in user_role_ids for rid in ROLE_IDS["head_organizer"])
+        org_role_ids = (
+            ROLE_IDS.get("head_organizer", []) + 
+            ROLE_IDS.get("deputy_server_head", []) + 
+            ROLE_IDS.get("Tournament_organizer", []) + 
+            ROLE_IDS.get("Tournament_supervision", [])
+        )
+        is_org = any(rid in user_role_ids for rid in org_role_ids)
         is_h_helper = any(rid in user_role_ids for rid in ROLE_IDS["head_helper"])
         is_helper_team = any(rid in user_role_ids for rid in ROLE_IDS["helper_team"])
         is_judge = any(rid in user_role_ids for rid in ROLE_IDS["judge"])
