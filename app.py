@@ -3545,11 +3545,14 @@ async def create(
         print(f"Error in event_create: {e}")
         await interaction.followup.send(f"⚠️ Error creating event: {e}", ephemeral=True)
 
-@events_group.command(name="results", description="Add event results.")
+@tree.command(name="event-result", description="Add event results.")
 @app_commands.describe(
-    event="Event name or ID (optional, defaults to current channel event)",
-    team1_score="Score for Team 1",
-    team2_score="Score for Team 2",
+    team_1="Name of Team 1",
+    team_1_captain="Captain of Team 1",
+    team_1_score="Score for Team 1",
+    team_2="Name of Team 2",
+    team_2_captain="Captain of Team 2",
+    team_2_score="Score for Team 2",
     number_of_matches="Total number of matches played",
     remarks="Remarks about the match",
     ss_1="Screenshot 1",
@@ -3564,11 +3567,14 @@ async def create(
     ss_10="Screenshot 10",
     ss_11="Screenshot 11"
 )
-async def results(
+async def event_result(
     interaction: discord.Interaction,
-    team1_score: int,
-    team2_score: int,
-    event: str = None,
+    team_1: str,
+    team_1_captain: discord.Member,
+    team_1_score: int,
+    team_2: str,
+    team_2_captain: discord.Member,
+    team_2_score: int,
     number_of_matches: int = 1,
     remarks: str = "ggwp",
     ss_1: discord.Attachment = None,
@@ -3596,56 +3602,44 @@ async def results(
     # Find event logic
     current_channel_id = interaction.channel.id
     event_id_found = None
-    event_data = None
+    event_data = {}
     
-    if event:
-        # Try to find by event name or ID if provided
-        for ev_id, data in scheduled_events.items():
-            if ev_id == event or event.lower() in str(data.get('team1_name', '')).lower() or event.lower() in str(data.get('team2_name', '')).lower():
-                event_id_found = ev_id
-                event_data = data
-                break
-    
-    if not event_data:
-        # Fallback to current channel
-        for ev_id, data in scheduled_events.items():
-            if data.get('channel_id') == current_channel_id:
-                event_id_found = ev_id
-                event_data = data
-                break
+    # Fallback to current channel
+    for ev_id, data in scheduled_events.items():
+        if data.get('channel_id') == current_channel_id:
+            event_id_found = ev_id
+            event_data = data
+            break
             
-    if not event_data:
-        await interaction.followup.send("❌ No event found. Please provide an event name or run this in a ticket channel.", ephemeral=True)
-        return
-
-    # Extract info from event data
-    team_1 = event_data.get('team1_captain')
-    team_2 = event_data.get('team2_captain')
-    t1_name = event_data.get('team1_name', team_1)
-    t2_name = event_data.get('team2_name', team_2)
+    # Extract info from event data where possible
     tournament = event_data.get('tournament', 'N/A')
     round_label = event_data.get('round', 'N/A')
     group_label = event_data.get('group')
 
+    # Format full names for display
+    t1_full = f"{team_1} ({team_1_captain.mention})"
+    t2_full = f"{team_2} ({team_2_captain.mention})"
+
     # Determine winner and loser
-    if team1_score > team2_score:
-        winner, winner_score = team_1, team1_score
-        winner_name = t1_name
-        loser, loser_score = team_2, team2_score
-        loser_name = t2_name
+    if team_1_score > team_2_score:
+        winner, winner_score = t1_full, team_1_score
+        winner_name = team_1
+        loser, loser_score = t2_full, team_2_score
+        loser_name = team_2
     else:
-        winner, winner_score = team_2, team2_score
-        winner_name = t2_name
-        loser, loser_score = team_1, team1_score
-        loser_name = t1_name
+        winner, winner_score = t2_full, team_2_score
+        winner_name = team_2
+        loser, loser_score = t1_full, team_1_score
+        loser_name = team_1
     
     # Validate scores
-    if team1_score < 0 or team2_score < 0:
+    if team_1_score < 0 or team_2_score < 0:
         await interaction.followup.send("❌ Scores cannot be negative", ephemeral=True)
         return
             
     # Create results embed
-    embed_description = f"🗓️ {team_1} Vs {team_2}\n"
+    # Create results embed
+    embed_description = f"🗓️ {t1_full} Vs {t2_full}\n"
     embed_description += f"**Tournament:** {tournament}\n"
     embed_description += f"**Round:** {round_label}"
     
@@ -3659,7 +3653,7 @@ async def results(
         timestamp=discord.utils.utcnow()
     )
     
-    embed.add_field(name="👑 Match-up", value=f"▪ Team 1: {team_1}\n▪ Team 2: {team_2}", inline=False)
+    embed.add_field(name="👑 Match-up", value=f"▪ Team 1: {t1_full}\n▪ Team 2: {t2_full}", inline=False)
     embed.add_field(name="\u200b", value="\u200b", inline=False) 
     
     results_text = f"🏆 {winner} ({winner_score}) Vs ({loser_score}) {loser} 💀"
@@ -3683,7 +3677,7 @@ async def results(
 
     # Log Result to Sheet
     if event_id_found:
-        score_combined = f"{t1_name} ({team_1_score}) - {t2_name} ({team_2_score})"
+        score_combined = f"{team_1} ({team_1_score}) - {team_2} ({team_2_score})"
         sheet_manager.log_event_result(event_id_found, winner_name, score_combined, remarks)
 
     # Handle screenshots
@@ -3753,7 +3747,7 @@ async def results(
             sheet_manager.log_attendance(
                 date_str=date_s, 
                 time_str=time_s, 
-                event_name=f"{t1_name} vs {t2_name} ({round_label})", 
+                event_name=f"{team_1} vs {team_2} ({round_label})", 
                 role="Judge", 
                 staff_name=interaction.user.name, 
                 marked_by=interaction.user.name
@@ -3770,7 +3764,7 @@ async def results(
                 sheet_manager.log_attendance(
                     date_str=date_s, 
                     time_str=time_s, 
-                    event_name=f"{t1_name} vs {t2_name} ({round_label})", 
+                    event_name=f"{team_1} vs {team_2} ({round_label})", 
                     role="Recorder", 
                     staff_name=rec_name, 
                     marked_by=interaction.user.name
@@ -3779,16 +3773,18 @@ async def results(
         print(f"Error with staff attendance: {e}")
 
     # Update event status
-    event_data['result_added'] = True
-    event_data['team1_score'] = team1_score
-    event_data['team2_score'] = team2_score
-    event_data['number_of_matches'] = number_of_matches
-    event_data['winner'] = winner
-    event_data['status'] = 'completed'
-    save_scheduled_events()
+    if event_data:
+        event_data['result_added'] = True
+        event_data['team1_score'] = team_1_score
+        event_data['team2_score'] = team_2_score
+        event_data['number_of_matches'] = number_of_matches
+        event_data['winner'] = winner
+        event_data['status'] = 'completed'
+        save_scheduled_events()
     
     # Auto cleanup
-    await schedule_event_cleanup(event_id_found, delay_hours=2)
+    if event_id_found:
+        await schedule_event_cleanup(event_id_found, delay_hours=2)
     
     # Update stats
     update_staff_stats(interaction.user.id, interaction.user.display_name, "Judge")
