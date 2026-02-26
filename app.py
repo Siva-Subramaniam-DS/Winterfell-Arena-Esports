@@ -157,7 +157,7 @@ ROLE_IDS = {
     "recorder": [1474281127643451543],
     "head_helper": [1473773791531372664],
     "helper_team": [1184587759487303790],
-    "head_organizer": [1473773782681518273, 1473773778415783986, 1473773779237863568, 1473773786419740700] 
+    "head_organizer": [1473773782681518273, 1473773778415783986, 1473773779237863568, 1473773786419740700, 1473773780303347824] 
 }
 
 # Set Windows event loop policy for asyncio
@@ -2189,16 +2189,23 @@ async def send_ten_minute_reminder(event_id: str, team1_captain: discord.Member,
         if not event_channel:
             return
 
-        # Get the latest data
-        resolved_judge = judge
-        resolved_recorder = None
+        # Get the latest data from scheduled_events if available
+        team1_name = "Team 1"
+        team2_name = "Team 2"
+        tournament_name = "Tournament"
+        round_name = "Match"
         
         if event_id in scheduled_events:
             event_data = scheduled_events[event_id]
-            resolved_judge = event_data.get('judge', judge)
-            resolved_recorder = event_data.get('recorder')
-            # ... (captains logic same as before)
-            
+            resolved_judge = event_data.get('judge', resolved_judge)
+            resolved_recorder = event_data.get('recorder', resolved_recorder)
+            team1_captain = event_data.get('team1_captain', team1_captain)
+            team2_captain = event_data.get('team2_captain', team2_captain)
+            team1_name = event_data.get('team1_name', "Team 1")
+            team2_name = event_data.get('team2_name', "Team 2")
+            tournament_name = event_data.get('tournament', "Tournament")
+            round_name = event_data.get('round', "Match")
+
         # Create embed
         embed = discord.Embed(
             title="⏰ 10-MINUTE MATCH REMINDER",
@@ -2206,12 +2213,31 @@ async def send_ten_minute_reminder(event_id: str, team1_captain: discord.Member,
             color=discord.Color.orange(),
             timestamp=discord.utils.utcnow()
         )
-        # Update fields...
         
+        embed.add_field(name="⚔️ Match-up", value=f"**{team1_name}** vs **{team2_name}**", inline=False)
+        embed.add_field(name="🏆 Tournament", value=tournament_name, inline=True)
+        embed.add_field(name="📍 Round", value=round_name, inline=True)
+        embed.add_field(name="🕔 Start Time", value=f"<t:{int(match_time.timestamp())}:F>", inline=False)
+        
+        embed.set_footer(text=f"{ORGANIZATION_NAME} • Match Reminder")
+        
+        def get_mention(obj):
+            if obj is None: return ""
+            if hasattr(obj, 'mention'): return obj.mention
+            if isinstance(obj, (int, str)):
+                s_obj = str(obj)
+                if s_obj.startswith('<@'): return s_obj
+                if s_obj.isdigit(): return f"<@{s_obj}>"
+            return str(obj)
+
         # Pings
-        pings = f"<@{team1_captain.id}> <@{team2_captain.id}>"
-        if resolved_judge: pings += f" <@{resolved_judge.id}>"
-        if resolved_recorder: pings += f" <@{resolved_recorder.id}>"
+        ping_list = []
+        for person in [team1_captain, team2_captain, resolved_judge, resolved_recorder]:
+            mention = get_mention(person)
+            if mention:
+                ping_list.append(mention)
+        
+        pings = " ".join(ping_list)
         
         notification_text = f"🔔 **MATCH REMINDER**\n\n{pings}\n\nYour match starts in **10 minutes**!"
         await event_channel.send(content=notification_text, embed=embed)
@@ -2689,7 +2715,7 @@ def create_event_poster(template_path: str, round_label: str, team1_captain: str
 
 def calculate_time_difference(event_datetime: datetime.datetime, user_timezone: str = None) -> dict:
     """Calculate time difference and format for different timezones"""
-    current_time = datetime.datetime.now()
+    current_time = datetime.datetime.now(pytz.UTC).replace(tzinfo=None)
     time_diff = event_datetime - current_time
     minutes_remaining = int(time_diff.total_seconds() / 60)
     
@@ -4027,9 +4053,23 @@ async def edit(
         await interaction.followup.send("❌ No event found in this ticket channel. Use `/events create` to create an event first.", ephemeral=True)
         return
     
-    # NEW: Check if match has already started
-    if datetime.datetime.now() > event_to_edit['datetime']:
+    # NEW: Check if match has already started or is within 20 minutes
+    now_utc = datetime.datetime.now(pytz.UTC)
+    match_time_utc = event_to_edit['datetime']
+    if match_time_utc.tzinfo is None:
+        match_time_utc = match_time_utc.replace(tzinfo=pytz.UTC)
+    
+    time_until_match = match_time_utc - now_utc
+    minutes_until_match = time_until_match.total_seconds() / 60
+
+    if minutes_until_match < 0:
         await interaction.followup.send("❌ This match has already started or finished. You can no longer edit its details.", ephemeral=True)
+        return
+        
+    if minutes_until_match < 20:
+        await interaction.followup.send("❌ You cannot edit an event that is starting in less than 20 minutes.\n\n"
+                                        "**Why?** This ensures the match reminder system works correctly for all participants.\n"
+                                        "**What to do?** Please edit events at least 20 minutes before they start, or delete this event and create a new one.", ephemeral=True)
         return
     
     # Check if at least one field is provided
@@ -4065,6 +4105,12 @@ async def edit(
         # Create new datetime
         current_year = datetime.datetime.now().year
         new_datetime = datetime.datetime(current_year, current_month, current_date, current_hour, current_minute)
+        
+        # Check if new time is also at least 20 minutes in the future
+        now_naive_utc = datetime.datetime.now(pytz.UTC).replace(tzinfo=None)
+        if (new_datetime - now_naive_utc).total_seconds() < 1200:
+             await interaction.followup.send("❌ The new match time must be at least 20 minutes in the future to ensure reminders work properly. Please choose a later time or delete/recreate the event.", ephemeral=True)
+             return
         
         # Calculate time differences 
         # (Check if calculate_time_difference is accessible or needs to be called)
