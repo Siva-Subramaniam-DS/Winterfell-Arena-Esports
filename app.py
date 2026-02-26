@@ -1,3 +1,8 @@
+import sys
+import io
+if isinstance(sys.stdout, io.TextIOWrapper):
+    sys.stdout.reconfigure(encoding='utf-8')
+
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -22,6 +27,23 @@ import requests
 import tempfile
 import gspread
 from google.oauth2.service_account import Credentials
+import firebase_admin
+from firebase_admin import credentials, firestore
+
+# Firebase Configuration
+try:
+    if os.path.exists('firebase_credentials.json'):
+        if not firebase_admin._apps:
+            cred = credentials.Certificate('firebase_credentials.json')
+            firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        print("✅ Connected to Firebase Firestore")
+    else:
+        print("⚠️ 'firebase_credentials.json' not found. Firebase will not be used.")
+        db = None
+except Exception as e:
+    print(f"❌ Firebase initialization error: {e}")
+    db = None
 
 # Google Sheets Configuration
 GOOGLE_SHEET_ID = "1i8yWJhe-T4cYQtrzfp4HcqH8UmndDi8yydWnMYDfcMI"  # Replace with your actual Sheet ID if different
@@ -129,6 +151,26 @@ class GoogleSheetManager:
             self.attendance_sheet.append_row(row)
         except Exception as e:
             print(f"Error logging attendance to sheet: {e}")
+            
+    def erase_sheets(self):
+        """Clears out all rows except the headers to prepare for a new tournament."""
+        if self.event_sheet:
+            try:
+                # Get total rows to ensure we clear enough
+                num_rows = self.event_sheet.row_count
+                if num_rows > 1:
+                    # Clear A2 to Z(num_rows) to avoid touching header
+                    self.event_sheet.batch_clear([f"A2:Z{num_rows+10}"])
+            except Exception as e:
+                print(f"Error erasing event_sheet: {e}")
+                
+        if self.attendance_sheet:
+            try:
+                num_rows = self.attendance_sheet.row_count
+                if num_rows > 1:
+                    self.attendance_sheet.batch_clear([f"A2:Z{num_rows+10}"])
+            except Exception as e:
+                print(f"Error erasing attendance_sheet: {e}")
 
 sheet_manager = GoogleSheetManager()
 
@@ -184,10 +226,20 @@ tree.add_command(events_group)
 
 
 # Load scheduled events from file on startup
+# Load scheduled events from file on startup
 def load_scheduled_events():
     global scheduled_events
     try:
-        if os.path.exists('scheduled_events.json'):
+        if db:
+            docs = db.collection('scheduled_events').stream()
+            data = {doc.id: doc.to_dict() for doc in docs}
+            # Convert datetime strings back to datetime objects
+            for event_id, event_data in data.items():
+                if 'datetime' in event_data:
+                    event_data['datetime'] = datetime.datetime.fromisoformat(event_data['datetime'])
+            scheduled_events = data
+            print(f"Loaded {len(scheduled_events)} scheduled events from Firebase")
+        elif os.path.exists('scheduled_events.json'):
             with open('scheduled_events.json', 'r') as f:
                 data = json.load(f)
                 # Convert datetime strings back to datetime objects
@@ -219,8 +271,16 @@ def save_scheduled_events():
                 
             data_to_save[event_id] = event_copy
         
-        with open('scheduled_events.json', 'w') as f:
-            json.dump(data_to_save, f, indent=2)
+        if db:
+            # Batch write events to Firebase
+            batch = db.batch()
+            for ev_id, ev_data in data_to_save.items():
+                doc_ref = db.collection('scheduled_events').document(ev_id)
+                batch.set(doc_ref, ev_data)
+            batch.commit()
+        else:
+            with open('scheduled_events.json', 'w') as f:
+                json.dump(data_to_save, f, indent=2)
     except Exception as e:
         print(f"Error saving scheduled events: {e}")
 
@@ -244,7 +304,15 @@ def load_rules():
     """Load rules from persistent storage"""
     global tournament_rules
     try:
-        if os.path.exists('tournament_rules.json'):
+        if db:
+            doc = db.collection('settings').document('tournament_rules').get()
+            if doc.exists:
+                tournament_rules = doc.to_dict().get('rules', {})
+                print(f"Loaded tournament rules from Firebase")
+            else:
+                tournament_rules = {}
+                print("No existing rules found in Firebase, starting with empty rules")
+        elif os.path.exists('tournament_rules.json'):
             with open('tournament_rules.json', 'r', encoding='utf-8') as f:
                 tournament_rules = json.load(f)
                 print(f"Loaded tournament rules from file")
@@ -258,8 +326,11 @@ def load_rules():
 def save_rules():
     """Save rules to persistent storage"""
     try:
-        with open('tournament_rules.json', 'w', encoding='utf-8') as f:
-            json.dump(tournament_rules, f, indent=2, ensure_ascii=False)
+        if db:
+            db.collection('settings').document('tournament_rules').set({'rules': tournament_rules})
+        else:
+            with open('tournament_rules.json', 'w', encoding='utf-8') as f:
+                json.dump(tournament_rules, f, indent=2, ensure_ascii=False)
         return True
     except Exception as e:
         print(f"Error saving tournament rules: {e}")
@@ -269,39 +340,52 @@ def load_staff_stats():
     """Load staff statistics from persistent storage"""
     global staff_stats
     try:
-        # Check for legacy judge_stats.json first and migrate if needed
-        if os.path.exists('judge_stats.json') and not os.path.exists('staff_stats.json'):
-            print("Migrating legacy judge stats...")
-            try:
-                with open('judge_stats.json', 'r', encoding='utf-8') as f:
-                    legacy_data = json.load(f)
-                    for uid, data in legacy_data.items():
-                        staff_stats[uid] = {
-                            "name": data.get("name", "Unknown"),
-                            "judge_count": data.get("matches_judged", 0),
-                            "recorder_count": 0,
-                            "last_activity": datetime.datetime.fromisoformat(data["last_activity"]) if data.get("last_activity") else None
-                        }
-                print("Migration complete.")
-            except Exception as e:
-                print(f"Migration failed: {e}")
+        if db:
+            docs = db.collection('staff_stats').stream()
+            data = {doc.id: doc.to_dict() for doc in docs}
+            # Convert datetime strings back to datetime objects
+            for user_id, stats in data.items():
+                if 'last_activity' in stats and stats['last_activity']:
+                    try:
+                        stats['last_activity'] = datetime.datetime.fromisoformat(stats['last_activity'])
+                    except ValueError:
+                         stats['last_activity'] = None
+            staff_stats = data
+            print(f"Loaded staff statistics from Firebase")
+        elif os.path.exists('staff_stats.json'):
+            # Check for legacy judge_stats.json first and migrate if needed
+            if os.path.exists('judge_stats.json') and not os.path.exists('staff_stats.json'):
+                print("Migrating legacy judge stats...")
+                try:
+                    with open('judge_stats.json', 'r', encoding='utf-8') as f:
+                        legacy_data = json.load(f)
+                        for uid, data in legacy_data.items():
+                            staff_stats[uid] = {
+                                "name": data.get("name", "Unknown"),
+                                "judge_count": data.get("matches_judged", 0),
+                                "recorder_count": 0,
+                                "last_activity": datetime.datetime.fromisoformat(data["last_activity"]) if data.get("last_activity") else None
+                            }
+                    print("Migration complete.")
+                except Exception as e:
+                    print(f"Migration failed: {e}")
 
-        if os.path.exists('staff_stats.json'):
-            with open('staff_stats.json', 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # Convert datetime strings back to datetime objects
-                for user_id, stats in data.items():
-                    if 'last_activity' in stats and stats['last_activity']:
-                        try:
-                            stats['last_activity'] = datetime.datetime.fromisoformat(stats['last_activity'])
-                        except ValueError:
-                             stats['last_activity'] = None
-                staff_stats = data
-                print(f"Loaded staff statistics from file")
-        else:
-            if not staff_stats: # Don't overwrite if we just migrated
-                staff_stats = {}
-                print("No existing staff stats file found, starting with empty stats")
+            if os.path.exists('staff_stats.json'):
+                with open('staff_stats.json', 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # Convert datetime strings back to datetime objects
+                    for user_id, stats in data.items():
+                        if 'last_activity' in stats and stats['last_activity']:
+                            try:
+                                stats['last_activity'] = datetime.datetime.fromisoformat(stats['last_activity'])
+                            except ValueError:
+                                 stats['last_activity'] = None
+                    staff_stats = data
+                    print(f"Loaded staff statistics from file")
+        
+        if not staff_stats: # Fallback if neither exists or empty
+            staff_stats = {}
+            print("No existing staff stats found, starting with empty stats")
     except Exception as e:
         print(f"Error loading staff statistics: {e}")
         staff_stats = {}
@@ -317,8 +401,15 @@ def save_staff_stats():
                 stats_copy['last_activity'] = stats_copy['last_activity'].isoformat()
             data_to_save[str(user_id)] = stats_copy
         
-        with open('staff_stats.json', 'w', encoding='utf-8') as f:
-            json.dump(data_to_save, f, indent=2, ensure_ascii=False)
+        if db:
+            batch = db.batch()
+            for uid, stats in data_to_save.items():
+                doc_ref = db.collection('staff_stats').document(uid)
+                batch.set(doc_ref, stats)
+            batch.commit()
+        else:
+            with open('staff_stats.json', 'w', encoding='utf-8') as f:
+                json.dump(data_to_save, f, indent=2, ensure_ascii=False)
         return True
     except Exception as e:
         print(f"Error saving staff statistics: {e}")
@@ -3680,17 +3771,17 @@ async def event_result(
         score_combined = f"{team_1} ({team_1_score}) - {team_2} ({team_2_score})"
         sheet_manager.log_event_result(event_id_found, winner_name, score_combined, remarks)
 
-    # Handle screenshots
+    # Handle screenshots safely by caching the bytes
     screenshots = [ss_1, ss_2, ss_3, ss_4, ss_5, ss_6, ss_7, ss_8, ss_9, ss_10, ss_11]
-    files_to_send = []
+    screenshot_data = []
     screenshot_names = []
     
     for i, screenshot in enumerate(screenshots, 1):
         if screenshot:
             try:
+                # Capture the bytes once so we can safely reuse them globally without seek()
                 file_data = await screenshot.read()
-                file_obj = discord.File(fp=io.BytesIO(file_data), filename=f"SS-{i}_{screenshot.filename}")
-                files_to_send.append(file_obj)
+                screenshot_data.append((file_data, f"SS-{i}_{screenshot.filename}"))
                 screenshot_names.append(f"SS-{i}")
             except Exception as e:
                 print(f"Error processing screenshot {i}: {e}")
@@ -3702,34 +3793,28 @@ async def event_result(
     
     # Post to Results Channel
     try:
-        results_channel = interaction.guild.get_channel(CHANNEL_IDS["results"])
+        results_channel = interaction.guild.get_channel(CHANNEL_IDS["results"]) or bot.get_channel(CHANNEL_IDS["results"])
         if results_channel:
-            # We need to recreate files for each send since fp is consumed
+            # We recreate files for each send since fp is consumed upon sending
             fs = []
-            for i, screenshot in enumerate(screenshots, 1):
-                if screenshot:
-                    await screenshot.seek(0)
-                    d = await screenshot.read()
-                    fs.append(discord.File(fp=io.BytesIO(d), filename=f"SS-{i}_{screenshot.filename}"))
+            for data, name in screenshot_data:
+                fs.append(discord.File(fp=io.BytesIO(data), filename=name))
             await results_channel.send(embed=embed, files=fs)
     except Exception as e:
-        print(f"Error posting to results: {e}")
+        print(f"Error posting to results channel: {e}")
 
     # Post to Current Channel
     try:
         fs = []
-        for i, screenshot in enumerate(screenshots, 1):
-            if screenshot:
-                await screenshot.seek(0)
-                d = await screenshot.read()
-                fs.append(discord.File(fp=io.BytesIO(d), filename=f"SS-{i}_{screenshot.filename}"))
+        for data, name in screenshot_data:
+            fs.append(discord.File(fp=io.BytesIO(data), filename=name))
         await interaction.channel.send(embed=embed, files=fs)
     except Exception as e:
         print(f"Error posting to current channel: {e}")
 
-    # Staff Attendance
+    # Staff Attendance Channel
     try:
-        staff_attendance_channel = interaction.guild.get_channel(CHANNEL_IDS["staff_attendance"])
+        staff_attendance_channel = interaction.guild.get_channel(CHANNEL_IDS["staff_attendance"]) or bot.get_channel(CHANNEL_IDS["staff_attendance"])
         if staff_attendance_channel:
             att_text = f"🏅 {team_1} Vs {team_2}\n**Round:** {round_label}\n"
             if group_label: att_text += f"**Group:** {group_label}\n"
@@ -4889,6 +4974,89 @@ async def exchange(interaction: discord.Interaction, role: app_commands.Choice[s
             
     if not event_found:
         await interaction.response.send_message("❌ No scheduled event found in this channel.", ephemeral=True)
+
+@tree.command(name="tournament-setup", description="Wipe all old data and set up for a new tournament (Bot Owner Only)")
+async def tournament_setup(interaction: discord.Interaction):
+    # Only bot owner
+    if not await interaction.client.is_owner(interaction.user) and interaction.user.id != BOT_OWNER_ID:
+        await interaction.response.send_message("❌ This command is restricted to the Bot Owner ONLY.", ephemeral=True)
+        return
+        
+    await interaction.response.defer(ephemeral=False)
+    
+    status = []
+    
+    # 1. Connection check
+    if db and sheet_manager.client:
+        status.append("✅ **Connections:** Firebase and Google Sheets are Connected.")
+    elif db:
+        status.append("⚠️ **Connections:** Firebase Connected, but Google Sheets disconnected.")
+    elif sheet_manager.client:
+        status.append("⚠️ **Connections:** Google Sheets Connected, but Firebase disconnected.")
+    else:
+        status.append("❌ **Connections:** Missing database connection! Aborting.")
+        await interaction.followup.send("\n".join(status))
+        return
+        
+    # 2. Sheet Cleaned
+    try:
+        sheet_manager.erase_sheets()
+        status.append("✅ **Spreadsheets:** Previous records cleared (Headers preserved).")
+    except Exception as e:
+        status.append(f"❌ **Spreadsheets:** Failed to clear sheets - {e}")
+
+    # 3. Clean local collections
+    global scheduled_events, staff_stats, tournament_rules
+    scheduled_events.clear()
+    staff_stats.clear()
+    tournament_rules.clear()
+    
+    # 4. Clean Firebase Collections
+    try:
+        if db:
+            batch = db.batch()
+            
+            # Events
+            docs = db.collection('scheduled_events').stream()
+            for doc in docs:
+                batch.delete(doc.reference)
+                
+            # Staff Stats
+            docs = db.collection('staff_stats').stream()
+            for doc in docs:
+                batch.delete(doc.reference)
+                
+            # Settings
+            db.collection('settings').document('tournament_rules').set({'rules': {}})
+                
+            batch.commit()
+            status.append("✅ **Database:** All previous matches & staff stats permanently deleted from server.")
+    except Exception as e:
+        status.append(f"❌ **Database:** Failed to wipe Firebase - {e}")
+        
+    status.append("✅ **Staff Leaderboard:** Cleaned and reset to zero.")
+    
+    # Overwrite JSON (Fail safes)
+    save_scheduled_events()
+    save_staff_stats()
+    save_rules()
+    
+    embed = discord.Embed(
+        title="🛠️ Tournament Reset & Setup Complete",
+        description="\n".join(status),
+        color=discord.Color.green()
+    )
+    
+    embed.add_field(
+        name="⚠️ Next Steps Required:",
+        value="1. **Bracket Link:** Please upload the new bracket link.\n"
+              "2. **Tournament Rules:** Please run `/rules` to write and publish the new tournament rules.",
+        inline=False
+    )
+    
+    embed.set_footer(text=f"Powered by • {ORGANIZATION_NAME}")
+    
+    await interaction.followup.send(embed=embed)
 
 
 if __name__ == "__main__":
