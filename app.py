@@ -32,15 +32,25 @@ from firebase_admin import credentials, firestore
 
 # Firebase Configuration
 try:
-    if os.path.exists('firebase_credentials.json'):
-        if not firebase_admin._apps:
+    if not firebase_admin._apps:
+        if os.environ.get("FIREBASE_CREDENTIALS"):
+            # Load from raw JSON string Environment Variable instead of a complicated file mount
+            cred_dict = json.loads(os.environ.get("FIREBASE_CREDENTIALS"))
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            print("✅ Connected to Firebase Firestore (via Env Var)")
+        elif os.path.exists('firebase_credentials.json'):
             cred = credentials.Certificate('firebase_credentials.json')
             firebase_admin.initialize_app(cred)
+            db = firestore.client()
+            print("✅ Connected to Firebase Firestore (via File)")
+        else:
+            print("⚠️ Firebase credentials not found (JSON file or Env Var missing). Firebase disabled.")
+            db = None
+    else:
         db = firestore.client()
         print("✅ Connected to Firebase Firestore")
-    else:
-        print("⚠️ 'firebase_credentials.json' not found. Firebase will not be used.")
-        db = None
 except Exception as e:
     print(f"❌ Firebase initialization error: {e}")
     db = None

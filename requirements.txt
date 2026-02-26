@@ -25,3 +25,6 @@ requests>=2.31.0
 # Google Sheets Integration
 gspread>=5.10.0
 google-auth>=2.22.0
+
+# Firebase Database
+firebase-admin>=6.6.0
